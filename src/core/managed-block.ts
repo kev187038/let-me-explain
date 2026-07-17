@@ -144,6 +144,21 @@ export function upsertBlock(
 }
 
 /**
+ * Append a fresh block WITHOUT scanning for existing sentinels. Only for the
+ * corrupted-sentinel path, after the user explicitly chose "append anyway"
+ * (the broken markers stay behind for them to clean up manually).
+ */
+export function forceAppendBlock(content: string, body: string, version: string): string {
+  const eol = usesCrlf(content) ? '\r\n' : '\n';
+  if (content === '') return `${renderBlock(body, version, eol)}${eol}`;
+  let out = content;
+  if (!out.endsWith('\n')) out += eol;
+  out += eol;
+  out += `${renderBlock(body, version, eol)}${eol}`;
+  return out;
+}
+
+/**
  * Remove the block plus the single blank-line separator upsert added.
  * Guarantees removeBlock(upsertBlock(x).content) === x, except that a file
  * that originally had no trailing newline gains one (see upsertBlock docs).
