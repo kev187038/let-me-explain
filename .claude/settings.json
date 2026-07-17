@@ -4,7 +4,11 @@
       "Bash(node dist/cli.js)",
       "Bash(npx vitest *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(npx tsc *)",
+      "Bash(rm -rf /tmp/claude-1000/-home-gabi-Desktop-stuff-let-me-explain/60cd0863-884d-475c-98dd-77a054b3cb71/scratchpad/pkgtest)",
+      "Bash(mkdir -p /tmp/claude-1000/-home-gabi-Desktop-stuff-let-me-explain/60cd0863-884d-475c-98dd-77a054b3cb71/scratchpad/pkgtest)",
+      "Bash(npm install *)"
     ]
   }
 }
