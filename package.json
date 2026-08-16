@@ -1,0 +1,45 @@
+{
+  "name": "let-me-explain",
+  "version": "0.2.0",
+  "description": "Makes your coding agent explain every edit and command before it runs, so you learn while it works.",
+  "type": "module",
+  "bin": {
+    "let-me-explain": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "keywords": [
+    "ai",
+    "claude-code",
+    "mcp",
+    "hooks",
+    "learning",
+    "junior-developer"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "@modelcontextprotocol/sdk": "^1.22.1",
+    "hono": "^4.10.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

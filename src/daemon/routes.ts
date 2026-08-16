@@ -1,0 +1,199 @@
+import { Hono } from 'hono';
+import {
+  DecisionRequestSchema,
+  ExplainInputSchema,
+  HookEventSchema,
+  LIMITS,
+  ModeRequestSchema,
+  type PreToolUseOutput,
+} from '../contracts/index.js';
+import { validateExplanation } from '../core/explanation.js';
+import { explainableLines } from '../core/lines.js';
+import { TOOL_VERSION } from '../version.js';
+import type { Logger } from './log.js';
+import type { ModeStore } from './mode.js';
+import { LEARNER_IS_WRITING, explainRequest } from './prompts.js';
+import type { TicketStore } from './tickets.js';
+import type { ToolNames } from './tool-name.js';
+
+export interface DaemonDeps {
+  store: TicketStore;
+  mode: ModeStore;
+  log: Logger;
+  toolNames: ToolNames;
+  token: string;
+  decisionTimeoutMs?: number;
+}
+
+const allow = (): PreToolUseOutput => ({
+  hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
+});
+
+const deny = (reason: string): PreToolUseOutput => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'deny',
+    permissionDecisionReason: reason,
+  },
+});
+
+export function createApp(deps: DaemonDeps): Hono {
+  const { store, mode, log, toolNames, token } = deps;
+  const decisionTimeoutMs = deps.decisionTimeoutMs ?? LIMITS.decisionTimeoutMs;
+  const app = new Hono();
+
+  app.use('*', async (c, next) => {
+    if (c.req.path === '/health') return next();
+    if (c.req.header('authorization') !== `Bearer ${token}`) {
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    return next();
+  });
+
+  app.get('/health', (c) => c.json({ ok: true, version: TOOL_VERSION, pid: process.pid }));
+
+  app.post('/hook', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = HookEventSchema.safeParse(body);
+    if (!parsed.success) return c.json(allow());
+
+    const event = parsed.data;
+    toolNames.observe(event.toolName);
+
+    if (mode.get(event.sessionId) === 'off') return c.json(allow());
+
+    const explainable = explainableLines(event.toolName, event.toolInput);
+    if (!explainable || explainable.lines.length === 0) return c.json(allow());
+
+    const found = store.lookup(event);
+    const { ticket } = found;
+
+    if (found.kind === 'declined') return c.json(deny(LEARNER_IS_WRITING));
+
+    if (found.kind === 'decided') {
+      store.consume(ticket.id);
+      return c.json(allow());
+    }
+
+    if (found.kind === 'minted' || found.kind === 'awaiting_explanation') {
+      await log.append({
+        type: found.kind === 'minted' ? 'ticket.minted' : 'ticket.reasked',
+        sessionId: event.sessionId,
+        ticket: ticket.id,
+        toolName: event.toolName,
+        target: explainable.target,
+      });
+      return c.json(
+        deny(explainRequest(ticket.id, toolNames.explain(), explainable.lines.length)),
+      );
+    }
+
+    await log.append({
+      type: 'decision.awaiting',
+      sessionId: event.sessionId,
+      ticket: ticket.id,
+    });
+
+    const outcome = await store.awaitDecision(ticket.id, decisionTimeoutMs);
+    await log.append({
+      type: 'decision.made',
+      sessionId: event.sessionId,
+      ticket: ticket.id,
+      outcome,
+    });
+
+    if (outcome === 'write') return c.json(deny(LEARNER_IS_WRITING));
+    // A timeout must never leave the agent hanging: allow, and record that
+    // nobody was watching.
+    if (outcome === 'timeout') store.decide(ticket.id, 'allow');
+    store.consume(ticket.id);
+    return c.json(allow());
+  });
+
+  app.post('/explain', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = ExplainInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: parsed.error.issues[0]?.message ?? 'invalid input' }, 400);
+    }
+
+    const ticket = store.get(parsed.data.ticket);
+    if (!ticket) {
+      return c.json(
+        {
+          ok: false,
+          error: `Unknown or expired ticket "${parsed.data.ticket}". Retry the tool call to get a fresh one.`,
+        },
+        404,
+      );
+    }
+
+    const explainable = explainableLines(ticket.toolName, ticket.toolInput);
+    if (!explainable) return c.json({ ok: false, error: 'nothing to explain' }, 400);
+
+    const valid = validateExplanation(explainable, parsed.data);
+    if (!valid.ok) {
+      await log.append({
+        type: 'explain.rejected',
+        sessionId: ticket.sessionId,
+        ticket: ticket.id,
+        reason: valid.error,
+      });
+      return c.json({ ok: false, error: valid.error }, 400);
+    }
+
+    store.attachExplanation(ticket.id, { ...parsed.data, at: Date.now() });
+    await log.append({
+      type: 'explain.accepted',
+      sessionId: ticket.sessionId,
+      ticket: ticket.id,
+      lines: parsed.data.lines.length,
+    });
+    return c.json({ ok: true, ticket: ticket.id });
+  });
+
+  // The shim reports our own MCP tool as the harness actually named it, so
+  // later denials can point at a tool that provably exists.
+  app.post('/observed', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { toolName?: unknown } | null;
+    if (typeof body?.toolName === 'string') toolNames.observe(body.toolName);
+    return c.json({ ok: true, explain: toolNames.explain() });
+  });
+
+  app.get('/pending', (c) => c.json({ pending: store.pending() }));
+
+  app.post('/decision', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = DecisionRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: 'invalid decision' }, 400);
+
+    const ticket = store.get(parsed.data.ticket);
+    if (!store.decide(parsed.data.ticket, parsed.data.decision)) {
+      return c.json({ error: 'ticket is not waiting for a decision' }, 409);
+    }
+    if (ticket) {
+      await log.append({
+        type: 'decision.sent',
+        sessionId: ticket.sessionId,
+        ticket: ticket.id,
+        decision: parsed.data.decision,
+      });
+    }
+    return c.json({ ok: true });
+  });
+
+  app.get('/mode', (c) => {
+    const sessionId = c.req.query('sessionId');
+    return c.json({ mode: mode.get(sessionId), ...mode.snapshot() });
+  });
+
+  app.post('/mode', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = ModeRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: 'invalid mode' }, 400);
+    await mode.set(parsed.data.mode, parsed.data.sessionId);
+    return c.json({ ok: true, mode: parsed.data.mode });
+  });
+
+  return app;
+}
