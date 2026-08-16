@@ -3,8 +3,10 @@
   "displayName": "Let Me Explain",
   "version": "0.2.0",
   "description": "Makes your coding agent explain every edit and command before it runs, so you learn while it works.",
+  "author": {
+    "name": "Gabi",
+    "email": "xperimentdev@gmail.com"
+  },
   "license": "MIT",
-  "keywords": ["learning", "teaching", "junior-developer", "hooks", "mcp"],
-  "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json"
+  "keywords": ["learning", "teaching", "junior-developer", "hooks", "mcp"]
 }

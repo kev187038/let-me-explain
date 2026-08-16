@@ -1,0 +1,17 @@
+{
+  "name": "let-me-explain",
+  "owner": {
+    "name": "Gabi",
+    "email": "xperimentdev@gmail.com"
+  },
+  "description": "The let-me-explain plugin: your coding agent explains every edit before it runs.",
+  "plugins": [
+    {
+      "name": "let-me-explain",
+      "source": "./",
+      "description": "Makes your coding agent explain every edit and command before it runs, so you learn while it works.",
+      "category": "learning",
+      "tags": ["learning", "teaching", "junior-developer", "hooks", "mcp"]
+    }
+  ]
+}
