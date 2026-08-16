@@ -65,6 +65,46 @@ session, so every extra sentence costs tokens forever and dilutes attention. Tar
 
 ---
 
+## The explanation goes in Claude Code's own permission prompt
+
+**Rejected:** a browser window — a daemon SSE stream feeding a React + Vite + Shiki app. That was
+planned in detail and abandoned before any of it was written.
+
+**Why it lost:** it answered the wrong question. The goal is that the learner *sees* the
+explanation, not that we own a surface. `permissionDecision: "ask"` escalates to Claude Code's own
+approval prompt with `permissionDecisionReason` shown to the user, so the explanation appears
+inline where they already are. The VS Code extension renders that same prompt, so VS Code comes
+free with no second extension to build, install or publish.
+
+It also **deletes** architecture instead of adding it: no browser, no SSE, no React, no bundler,
+no npm workspaces — and no blocking, because the hook answers immediately instead of parking for
+up to five minutes.
+
+**What it bought for free:** the prompt already offers *"No, and tell Claude what to do
+differently"*, and that text reaches the agent. That is feature 4 ("I'll write it myself") and
+much of feature 5 (ask a question) with no decision route of our own.
+
+**What it costs:** no syntax highlighting and no control over layout, and a long change has to be
+truncated to keep the prompt usable. Feature 2 (choosing which lines to explain) has no surface
+here at all — which is why `surface: window` is kept rather than deleted: it is the foundation a
+VS Code panel would reuse.
+
+---
+
+## `ask` means the hook never learns the outcome
+
+**The problem it created:** under `surface: prompt` the hook answers and exits, so it never finds
+out what the learner chose. Slice 2's approve/reject counts would have silently gone to zero —
+worse than not reporting them, because the number would still look authoritative.
+
+**Fix:** recover the outcome after the fact from `PostToolUse` (it ran → approved) and
+`PermissionDenied` (it did not → rejected), via a small observational hook that logs and exits.
+
+**Habit worth naming:** when you hand a decision to another system, ask what telemetry you just
+gave up. Metrics that quietly stop being fed are more dangerous than metrics you never had.
+
+---
+
 ## The control-command exemption matches a command, not a substring
 
 **Rejected:** `command.includes('let-me-explain')`, which slice 1 shipped and this page previously

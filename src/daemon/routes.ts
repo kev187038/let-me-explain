@@ -5,6 +5,7 @@ import {
   HookEventSchema,
   LIMITS,
   ModeRequestSchema,
+  SurfaceRequestSchema,
   type PreToolUseOutput,
 } from '../contracts/index.js';
 import { validateExplanation } from '../core/explanation.js';
@@ -13,7 +14,12 @@ import { TOOL_VERSION } from '../version.js';
 import type { Logger } from './log.js';
 import type { ModeStore } from './mode.js';
 import { renderInstructions } from './instructions.js';
-import { LEARNER_IS_WRITING, explainMismatch, explainRequest } from './prompts.js';
+import {
+  LEARNER_IS_WRITING,
+  explainMismatch,
+  explainRequest,
+  explanationForPrompt,
+} from './prompts.js';
 import type { TicketStore } from './tickets.js';
 import type { ToolNames } from './tool-name.js';
 
@@ -34,6 +40,16 @@ const deny = (reason: string): PreToolUseOutput => ({
   hookSpecificOutput: {
     hookEventName: 'PreToolUse',
     permissionDecision: 'deny',
+    permissionDecisionReason: reason,
+  },
+});
+
+// Hands the decision to Claude Code's own approval prompt, with the
+// explanation as the context shown to the learner.
+const ask = (reason: string): PreToolUseOutput => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'ask',
     permissionDecisionReason: reason,
   },
 });
@@ -110,6 +126,22 @@ export function createApp(deps: DaemonDeps): Hono {
         toolName: event.toolName,
         target: explainable.target,
       });
+    }
+
+    // The explanation exists; who shows it and collects the answer depends on
+    // the surface. `prompt` hands both jobs to Claude Code and returns now.
+    if (mode.surface(event.sessionId) === 'prompt') {
+      const view = store.pending().find((p) => p.ticket === ticket.id);
+      await log.append({
+        type: 'decision.asked',
+        sessionId: event.sessionId,
+        ticket: ticket.id,
+        toolName: event.toolName,
+      });
+      // Deliberately not consumed: if the agent retries this same change the
+      // ticket is still here, so it re-asks rather than demanding a fresh
+      // explanation. It ages out with the normal TTL.
+      return c.json(ask(view ? explanationForPrompt(view) : 'Change explained by let-me-explain.'));
     }
 
     await log.append({
@@ -210,6 +242,20 @@ export function createApp(deps: DaemonDeps): Hono {
     c.text(renderInstructions({ explainTool: toolNames.explain() })),
   );
 
+  // How the outcome comes back when Claude Code owns the approval prompt.
+  app.post('/outcome', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+    if (!sessionId) return c.json({ ok: false }, 400);
+
+    await log.append({
+      type: body?.event === 'PermissionDenied' ? 'decision.rejected' : 'decision.approved',
+      sessionId,
+      toolName: typeof body?.toolName === 'string' ? body.toolName : null,
+    });
+    return c.json({ ok: true });
+  });
+
   app.get('/pending', (c) => c.json({ pending: store.pending() }));
 
   app.post('/decision', async (c) => {
@@ -234,7 +280,15 @@ export function createApp(deps: DaemonDeps): Hono {
 
   app.get('/mode', (c) => {
     const sessionId = c.req.query('sessionId');
-    return c.json({ mode: mode.get(sessionId), ...mode.snapshot() });
+    return c.json({ ...mode.settings(sessionId), ...mode.snapshot() });
+  });
+
+  app.post('/surface', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = SurfaceRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: 'invalid surface' }, 400);
+    await mode.setSurface(parsed.data.surface, parsed.data.sessionId);
+    return c.json({ ok: true, surface: parsed.data.surface });
   });
 
   app.post('/mode', async (c) => {

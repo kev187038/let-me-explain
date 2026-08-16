@@ -53,9 +53,11 @@ beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'lme-pre-'));
   env = { home, xdgStateHome: join(home, 'state') };
   store = createTicketStore();
+  const mode = await createModeStore(fsIo, modePath(env));
+  await mode.setSurface('window');
   app = createApp({
     store,
-    mode: await createModeStore(fsIo, modePath(env)),
+    mode,
     log: createLogger(fsIo, env),
     toolNames: createToolNames(),
     token: TOKEN,

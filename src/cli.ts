@@ -19,6 +19,7 @@ const USAGE = `let-me-explain ${TOOL_VERSION}
   allow <ticket>      let this change through
   write <ticket>      take it over and write it yourself
   stats               how often the agent explains before being asked
+  surface <where>     prompt (inline in Claude Code) or window (held for the CLI)
 
   --session <id>      scope on/off to one session instead of globally
 `;
@@ -95,11 +96,12 @@ async function status(): Promise<void> {
     process.stdout.write('let-me-explain: not running (agent runs unaffected)\n');
     return;
   }
-  const mode = (await call(address, '/mode')) as { mode: string; global: string };
+  const settings = (await call(address, '/mode')) as { mode: string; surface: string };
   const { pending } = (await call(address, '/pending')) as { pending: unknown[] };
   process.stdout.write(
     `let-me-explain: running on 127.0.0.1:${address.port}\n` +
-      `  mode:    ${mode.global}\n` +
+      `  mode:    ${settings.mode}\n` +
+      `  surface: ${settings.surface}\n` +
       `  pending: ${pending.length}\n`,
   );
 }
@@ -177,11 +179,27 @@ async function stats(): Promise<void> {
       `  rejected           ${s.rejected}${top ? `   most common: ${top.reason} (${top.count})` : ''}`,
     );
   }
-  out.push(`  decisions          ${s.allow} allow · ${s.write} write`);
+  out.push(`  decisions          ${s.approved} approved · ${s.declined} rejected`);
   if (s.medianWaitMs !== null) {
     out.push(`  median wait        ${(s.medianWaitMs / 1000).toFixed(1)}s`);
   }
   process.stdout.write(`${out.join('\n')}\n`);
+}
+
+async function setSurface(surface: string | undefined, sessionId?: string): Promise<void> {
+  if (surface !== 'prompt' && surface !== 'window') {
+    fail('usage: let-me-explain surface prompt|window');
+  }
+  const address = await connected();
+  await call(address, '/surface', {
+    method: 'POST',
+    body: JSON.stringify({ surface, ...(sessionId ? { sessionId } : {}) }),
+  });
+  process.stdout.write(
+    surface === 'prompt'
+      ? "surface: prompt — explanations appear in Claude Code's approval prompt\n"
+      : 'surface: window — changes are held; decide with `pending` then `allow`/`write`\n',
+  );
 }
 
 async function setMode(mode: 'on' | 'off', sessionId?: string): Promise<void> {
@@ -216,6 +234,8 @@ async function main(): Promise<void> {
       return pending();
     case 'stats':
       return stats();
+    case 'surface':
+      return setSurface(args[1], sessionId);
     case 'allow':
       return decide(args[1], 'allow');
     case 'write':

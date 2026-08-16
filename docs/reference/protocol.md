@@ -6,7 +6,7 @@ relates_to: [architecture, reference/cli, reference/hook-contract]
 
 # Daemon HTTP protocol
 
-Implemented in `src/daemon/routes.ts`. Seven paths, all on `127.0.0.1` at an ephemeral port.
+Implemented in `src/daemon/routes.ts`. All on `127.0.0.1` at an ephemeral port.
 
 ## Connecting
 
@@ -43,8 +43,9 @@ wedged daemon fails here and the call is allowed.
 
 ## `POST /hook`
 
-The intercepted tool call. **This request may block for minutes** — that is the point. It resolves
-when a decision arrives, or after the 5-minute decision timeout.
+The intercepted tool call. Under `surface: prompt` it answers immediately with `ask`. Under
+`surface: window` **it may block for minutes** — that is the point — resolving when a decision
+arrives or after the 5-minute timeout.
 
 **Request** — a harness-neutral `HookEvent`:
 
@@ -155,6 +156,23 @@ Resolve a blocked call. `{"ticket":"t_…","decision":"allow"|"write"}`.
 
 You may decide *before* the agent retries. The decision is stored on the ticket, so the later
 retry picks it up instead of parking.
+
+---
+
+## `POST /surface`
+
+`{"surface":"prompt"|"window","sessionId":"…"}` → `{"ok":true,"surface":"prompt"}`. Omit
+`sessionId` to set the global default. The effective surface is reported by `GET /mode`.
+
+---
+
+## `POST /outcome`
+
+`{"sessionId":"…","toolName":"Edit","event":"PostToolUse"|"PermissionDenied"}` → `{"ok":true}`.
+
+How the outcome gets back when Claude Code owns the approval prompt: the PreToolUse hook returned
+`ask` and exited, so it never learned what you chose. Logged as `decision.approved` or
+`decision.rejected` and counted by `let-me-explain stats`.
 
 ---
 

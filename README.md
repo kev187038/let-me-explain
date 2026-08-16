@@ -4,31 +4,39 @@ A plugin for a coding-agent harness that gives a junior developer a better chanc
 working with AI. Every line of code the agent writes, and every command it runs, is explained
 before it happens — and nothing lands until you say so.
 
+The explanation appears **inside Claude Code**, in its own approval prompt: in the terminal, or in
+the Claude Code panel if you use the VS Code extension. There is no second window to open and
+nothing extra to install.
+
 We refer to the **Coding Agent** as the normal coding agent, and to the **Teacher Agent** as the
 agent that explains to the user what is going on. Today they are the same agent (feature 0).
 
 ```
 you: fix the token expiry bug
 
-  ⏸  let-me-explain is holding an edit to src/auth.ts
+● Edit(src/auth.ts)
+  ⎿  const ttl = 900
+     return sign(payload, { expiresIn: ttl })
 
-  $ let-me-explain pending
+  [let-me-explain] src/auth.ts
+  Why: Tokens never expired, so a stolen one worked forever.
 
-    t_1f6d21e2  Edit  /repo/auth.ts  [awaiting_decision]
-      why: Tokens never expired, so a stolen one worked forever.
-        1 │ const ttl = 900
-          └ how long the token stays valid, in seconds
-        2 │ return sign(payload, { expiresIn: ttl })
-          └ signs the token so it expires after that time
+    1  how long the token stays valid, in seconds
+    2  signs the token so it expires after that time
 
-  $ let-me-explain allow t_1f6d21e2
+  Reject and say you'll write it yourself, or reject with a question, to do either.
+
+  Do you want to proceed?
+  ❯ 1. Yes
+    2. No, and tell Claude what to do differently
 ```
 
 ---
 
 ## Status
 
-Slice 1 ships the core loop. There is no second window yet — the CLI is the interface.
+The core loop works and the explanation appears in Claude Code's approval prompt. A dedicated
+editor panel — needed for choosing which lines get explained — is still ahead.
 
 | Feature | Status |
 |---|---|
@@ -36,11 +44,11 @@ Slice 1 ships the core loop. There is no second window yet — the CLI is the in
 | 1 · Explanations chunked per line | ✅ shipped (per line; per token planned) |
 | 2 · Choose which lines get explained | 📋 planned |
 | 3 · Teacher-Agent instructions | ✅ shipped — injected per session; personalisation planned |
-| 4 · Let-me-write | ✅ shipped |
-| 5 · Question section | 📋 planned |
+| 4 · Let-me-write | ✅ shipped — reject the prompt and say so |
+| 5 · Question section | 🔶 partial — reject with a question and the agent answers |
 | 6 · Install as a harness plug-in | ✅ shipped (Claude Code; Codex/OpenCode planned) |
 | 7 · Enable / disable toggle | 🔶 partial — `on`/`off` shipped, `observe` planned |
-| Second window (browser UI) | 📋 planned — see [docs/architecture.md](docs/architecture.md) |
+| Second window (separate panel) | 📋 planned — a VS Code panel; see [docs/decisions.md](docs/decisions.md) |
 
 ✅ shipped · 🔶 partial · 📋 planned
 
@@ -79,18 +87,21 @@ Dependencies install automatically into the plugin copy; you don't need to do an
 ## Try it in 60 seconds
 
 Open Claude Code in a scratch repo and ask for something small. Instructions injected at session
-start teach the agent to explain first, so its edit **blocks** straight away. In another terminal:
+start teach the agent to explain first, so the explanation arrives with the approval prompt:
 
-```console
-$ let-me-explain pending
-
-t_61dd5d39  Bash  shell  [awaiting_decision]
-  why: You asked for the current date saved to a file under /tmp/lme-live, which may not exist
-       yet, so the command creates the folder and then writes the date into it.
-    1 │ mkdir -p /tmp/lme-live && date > /tmp/lme-live/when.txt
-      └ Create the /tmp/lme-live folder, doing nothing if it already exists, then write today's
-        date and time into when.txt inside it.
 ```
+  [let-me-explain] shell
+  Why: You asked for the current date saved to a file under /tmp/lme-live, which may not
+       exist yet, so the command creates the folder and then writes the date into it.
+
+    1  Create the folder if it is missing, then write today's date and time into when.txt
+
+  Do you want to proceed?
+```
+
+Answer with a keypress. Choosing *"No, and tell Claude what to do differently"* opens a text
+field, and what you type goes back to the agent — that is how both **"I'll write this myself"**
+and **"why did you use `sign` here?"** work.
 
 If the agent forgets to explain first, its tool call is refused and the refusal tells it what to
 do — then it explains and retries:
@@ -114,15 +125,7 @@ $ let-me-explain stats
   intercepted        1
   explained upfront  1   (100%)
   needed a denial    0   (0%)   <- deny-rate
-  decisions          1 allow · 0 write
-  median wait        3.3s
-```
-
-Then either let it through, or take it over yourself:
-
-```console
-$ let-me-explain allow t_1f6d21e2     # the edit lands
-$ let-me-explain write t_1f6d21e2     # you write it by hand; the agent stands down
+  decisions          1 approved · 0 rejected
 ```
 
 Lazy explanations are rejected before you ever see them, and the agent is told why:
@@ -164,7 +167,12 @@ every failure instead of only when you need it. See [docs/features/07-toggle.md]
 | `let-me-explain allow <ticket>` | Let this change through |
 | `let-me-explain write <ticket>` | Take it over and write it yourself |
 | `let-me-explain stats` | How often the agent explains before being asked |
-| `--session <id>` | Scope `on`/`off` to one session instead of globally |
+| `let-me-explain surface prompt\|window` | Explain inline in Claude Code, or hold changes for the CLI |
+| `--session <id>` | Scope settings to one session instead of globally |
+
+`surface prompt` is the default and what a learner wants. `surface window` holds each change
+instead, so you inspect it with `pending` and answer with `allow` / `write` — useful for
+scripting, and the groundwork for a future editor panel.
 
 Full reference: [docs/reference/cli.md](docs/reference/cli.md).
 

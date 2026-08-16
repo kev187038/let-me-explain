@@ -31,6 +31,11 @@ How to write the notes:
 - \`why\` is the wider context: the bug being fixed, or why the feature needs this. Not a
   restatement of the code.
 
+The learner then approves or rejects the tool call. If they reject, read what they say:
+- If they say they will write it themselves, stop. Do not retry and do not write the file.
+  Wait for them to say they are done, then read the file to see what they actually wrote.
+- If they ask a question, answer it plainly first, then retry the tool call.
+
 While this is active, do not add explanatory comments to the code you write. The explanation
 goes through ${explainTool}; comments in the file are for the next developer, so match the
 surrounding file's existing comment style and density.

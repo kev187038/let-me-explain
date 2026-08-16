@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export type { Mode } from '../core/mode-file.js';
+export type { Mode, Surface } from '../core/mode-file.js';
 
 export const ModeSchema = z.enum(['on', 'off']);
 
@@ -56,6 +56,13 @@ export const ModeRequestSchema = z.object({
   sessionId: z.string().min(1).optional(),
 });
 
+export const SurfaceSchema = z.enum(['prompt', 'window']);
+
+export const SurfaceRequestSchema = z.object({
+  surface: SurfaceSchema,
+  sessionId: z.string().min(1).optional(),
+});
+
 export type TicketState = 'awaiting_explanation' | 'awaiting_decision' | 'resolved';
 
 export interface Explanation {
@@ -93,7 +100,7 @@ export interface PendingView {
 export interface PreToolUseOutput {
   hookSpecificOutput: {
     hookEventName: 'PreToolUse';
-    permissionDecision: 'allow' | 'deny';
+    permissionDecision: 'allow' | 'deny' | 'ask';
     permissionDecisionReason?: string;
   };
 }

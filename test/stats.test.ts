@@ -71,8 +71,8 @@ describe('summarise', () => {
         ].join('\n'),
       ),
     );
-    expect(s.allow).toBe(1);
-    expect(s.write).toBe(1);
+    expect(s.approved).toBe(1);
+    expect(s.declined).toBe(1);
     expect(s.medianWaitMs).toBe(1_500);
   });
 
@@ -80,7 +80,7 @@ describe('summarise', () => {
     const s = summarise(
       parseLogLines(line({ type: 'decision.made', ticket: 'orphan', at: 9, outcome: 'allow' })),
     );
-    expect(s.allow).toBe(1);
+    expect(s.approved).toBe(1);
     expect(s.medianWaitMs).toBeNull();
   });
 

@@ -96,6 +96,22 @@ awaiting_explanation ──explain()──► awaiting_decision ──allow─�
 - **TTL ~10 minutes.** A ticket that has sat unresolved that long no longer describes code that
   still matters.
 
+## Two surfaces
+
+Where the explanation appears, and who collects the answer, is one setting.
+
+| `surface` | The hook returns | Who shows it | Who decides |
+|---|---|---|---|
+| `prompt` *(default)* | `ask` + the explanation | Claude Code's own approval prompt — terminal or VS Code extension | You, with a keypress |
+| `window` | blocks until a decision | nothing automatically | `let-me-explain pending`, then `allow` / `write` |
+
+`prompt` is what a learner uses: the explanation lands inline where you already are, and there is
+no second window, no blocking, and no timeout. `window` keeps the held-request machinery for
+inspecting detail, for scripting, and as the foundation for a future VS Code panel (which is what
+feature 2's per-line selection will need).
+
+Everything before the final step is identical between them.
+
 ## The happy path
 
 The `SessionStart` hook injects instructions teaching the agent to explain *before* it acts, so
@@ -105,9 +121,10 @@ the normal sequence costs no wasted call:
    environment. The daemon shelves it as a **pre-explanation**, keyed `(sessionId, target)`.
 2. Agent makes the edit. `PreToolUse` fires, finds the shelved explanation, and validates it
    against the lines that actually turned up.
-3. It fits → the daemon mints a ticket already in `awaiting_decision` and **holds the request
-   open** while you read.
-4. You decide: `allow` releases it; `write` denies with a stand-down message.
+3. It fits → the daemon has an explanation for a change that is about to happen.
+4. Under `surface: prompt` the hook returns **`ask`** carrying that explanation, and Claude Code
+   shows you its approval prompt. Under `surface: window` it **holds the request open** instead,
+   and you answer with `let-me-explain allow` / `write`.
 
 A pre-explanation is a *claim* about content the daemon has not seen yet, so step 2's validation
 is the safety story: it binds only if it covers the real change. Pre-explanations carry a short
@@ -147,10 +164,10 @@ PreToolUse(tool, input)
   ticket already declined with `write` ............ deny  "do not retry"
   ticket already approved ......................... allow   (consume it)
   ticket exists, not yet explained ................ deny  "call explain, ticket=X"
-  pre-explanation fits this change ................ BLOCK until decision or timeout
   pre-explanation does not fit .................... deny  "did not match", + ticket
   nothing explains this change .................... deny  "call explain, ticket=X"
-  ticket explained ................................ BLOCK until decision or timeout
+  explained, surface = prompt ..................... ASK, explanation as the reason
+  explained, surface = window ..................... BLOCK until decision or timeout
         allow ..................................... allow
         write ..................................... deny  "do not retry"
         timeout ................................... allow   (fail open)

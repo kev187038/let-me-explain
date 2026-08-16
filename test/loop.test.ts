@@ -30,9 +30,12 @@ let env: Env;
 let app: Hono;
 let store: TicketStore;
 
+// These exercise the blocking `window` surface, so it is pinned rather than
+// inherited from the default (`prompt`).
 async function build(decisionTimeoutMs = 150) {
   store = createTicketStore();
   const mode = await createModeStore(fsIo, modePath(env));
+  await mode.setSurface('window');
   app = createApp({
     store,
     mode,

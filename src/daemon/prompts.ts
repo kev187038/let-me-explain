@@ -1,4 +1,39 @@
-import { LIMITS } from '../contracts/index.js';
+import { LIMITS, type PendingView } from '../contracts/index.js';
+
+// An unreadable prompt is worse than no explanation, so long changes are
+// truncated rather than flooding the approval screen.
+const MAX_PROMPT_LINES = 25;
+
+// Claude Code already renders the tool input in the approval prompt, so the
+// notes reference line numbers instead of repeating the code. Flip this if
+// that ever stops being true.
+const INCLUDE_CODE = false;
+
+export function explanationForPrompt(view: PendingView): string {
+  const explained = view.lines.filter((l) => l.note !== undefined);
+  const shown = explained.slice(0, MAX_PROMPT_LINES);
+  const hidden = explained.length - shown.length;
+
+  const out = [`[let-me-explain] ${view.target}`];
+  if (view.why) out.push(`Why: ${view.why}`);
+  out.push('');
+
+  for (const line of shown) {
+    out.push(
+      INCLUDE_CODE ? `  ${line.n} │ ${line.code}\n    └ ${line.note}` : `  ${line.n}  ${line.note}`,
+    );
+  }
+
+  if (hidden > 0) {
+    out.push(`  … ${hidden} more line(s) — run \`let-me-explain pending\` for the rest`);
+  }
+
+  out.push('');
+  out.push(
+    `Reject and say you'll write it yourself, or reject with a question, to do either.`,
+  );
+  return out.join('\n');
+}
 
 // These strings are prompts, not error messages: they land in the agent's
 // context and are the only thing steering it back into the loop. Wording

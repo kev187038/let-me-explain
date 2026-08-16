@@ -10,8 +10,9 @@ Implemented in `src/cli.ts`. Installed as `let-me-explain`; runnable unbuilt wit
 `npm run dev -- <command>`, or from the plugin copy with
 `node ~/.claude/plugins/cache/let-me-explain/let-me-explain/<version>/dist/cli.js`.
 
-Until the second window exists, this is the product's interface — `pending`, `allow` and `write`
-are feature 4, not debugging aids.
+With the default `surface: prompt`, Claude Code collects your decision and the commands below are
+for inspection and control. Under `surface: window` the daemon holds each change instead, and
+`pending` / `allow` / `write` become how you answer.
 
 ```
 let-me-explain
@@ -23,6 +24,7 @@ let-me-explain
   allow <ticket>      let this change through
   write <ticket>      take it over and write it yourself
   stats               how often the agent explains before being asked
+  surface <where>     prompt (inline in Claude Code) or window (held for the CLI)
 
   --session <id>      scope on/off to one session instead of globally
 ```
@@ -110,6 +112,23 @@ t_1f6d21e2: write
 `allow` releases the blocked call and the edit lands. `write` denies it and tells the agent to
 stand down so you can write the code yourself.
 
+## `surface`
+
+Where the explanation appears and who collects the decision.
+
+```console
+$ let-me-explain surface prompt
+surface: prompt — explanations appear in Claude Code's approval prompt
+
+$ let-me-explain surface window
+surface: window — changes are held; decide with `pending` then `allow`/`write`
+```
+
+`prompt` is the default. `window` is what `pending` / `allow` / `write` below operate on — with
+`prompt` set, Claude Code has already collected your answer and there is nothing pending.
+
+---
+
 ## `stats`
 
 Reads the JSONL session logs and reports whether the instruction layer is working.
@@ -119,8 +138,7 @@ $ let-me-explain stats
   intercepted        1
   explained upfront  1   (100%)
   needed a denial    0   (0%)   <- deny-rate
-  decisions          1 allow · 0 write
-  median wait        3.3s
+  decisions          1 approved · 0 rejected
 ```
 
 **Deny-rate is the number to watch.** It is the fraction of changes the agent made without

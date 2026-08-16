@@ -39,10 +39,10 @@ shape; the description shapes behaviour.
 and it corrects itself. That is the self-repair loop — no retry code of ours involved.
 
 ### `src/cli.ts`
-`status`, `on`/`off`, `start`/`stop`, `pending`, `allow`, `write`, `stats`.
+`status`, `on`/`off`, `start`/`stop`, `pending`, `allow`, `write`, `stats`, `surface`.
 
-**Why it renders pending work with the code inline:** until the second window exists, this *is*
-the product's interface. `pending` and `allow` are not debugging aids — they are feature 4.
+**Why it renders pending work with the code inline:** under `surface: window` this *is* how the
+learner reads and answers, so `pending` and `allow` are feature 4 rather than debugging aids.
 
 ### `src/hook/session-start.ts`
 Runs at session start: makes sure the daemon is up, fetches the instruction text, prints it.
@@ -175,6 +175,15 @@ Parses and resolves the on/off mode. Shared by daemon and shim.
 also means the off switch keeps working when the daemon is wedged, which is exactly when you most
 want it.
 
+### `src/hook/outcome.ts`
+Observational only: reports what the learner chose back to the daemon.
+
+**Why it exists:** under `surface: prompt` the PreToolUse hook answers and exits, so it never
+learns the outcome. Without this, `stats` would report zero decisions forever — a number that
+still looks authoritative. `PostToolUse` means the tool ran; `PermissionDenied` means it did not.
+
+**Why it is `async: true` in `hooks.json`:** it must never delay a tool call for a metric.
+
 ### `src/core/stats.ts`
 Aggregates the JSONL event log into the numbers `let-me-explain stats` prints.
 
@@ -246,6 +255,7 @@ discipline.
 | `test/killswitch.test.ts` | Modes, the never-intercept list, and that the shim fails open |
 | `test/shim.test.ts` | **The positive control** — a real daemon and a real shim producing a *deny*. Every other shim test asserts `allow`, which a shim that did nothing would also pass |
 | `test/prebind.test.ts` | Explaining before the change: binding, one-change-per-explanation, the coverage-mismatch fallback, session and target scoping, and that the instruction text stays short |
+| `test/surface.test.ts` | The `prompt` surface returning `ask`, the prompt formatter and its truncation, and that the pre-surface mode-file format still parses |
 | `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
 
 ---

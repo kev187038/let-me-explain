@@ -9,6 +9,7 @@ export default defineConfig({
     'src/daemon/main.ts',
     'src/hook/pretooluse.ts',
     'src/hook/session-start.ts',
+    'src/hook/outcome.ts',
     'src/mcp/server.ts',
   ],
   format: ['esm'],

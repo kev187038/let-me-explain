@@ -14,10 +14,12 @@ export interface Stats {
   denied: number;
   denyRate: number | null;
   mismatched: number;
+  /** Explanations the daemon refused: wrong line coverage, too wordy. */
   rejected: number;
   topRejection: { reason: string; count: number } | null;
-  allow: number;
-  write: number;
+  /** What the learner chose. */
+  approved: number;
+  declined: number;
   medianWaitMs: number | null;
 }
 
@@ -45,7 +47,9 @@ function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2 : (sorted[mid] ?? 0);
+  return sorted.length % 2 === 0
+    ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
+    : (sorted[mid] ?? 0);
 }
 
 export function summarise(lines: LogLine[]): Stats {
@@ -53,8 +57,8 @@ export function summarise(lines: LogLine[]): Stats {
   let denied = 0;
   let mismatched = 0;
   let rejected = 0;
-  let allow = 0;
-  let write = 0;
+  let approved = 0;
+  let declined = 0;
   const reasons = new Map<string, number>();
   const awaitingAt = new Map<string, number>();
   const waits: number[] = [];
@@ -79,13 +83,22 @@ export function summarise(lines: LogLine[]): Stats {
       case 'decision.awaiting':
         if (line.ticket && typeof line.at === 'number') awaitingAt.set(line.ticket, line.at);
         break;
+      // Surface `window`: the daemon held the request and knows the answer.
       case 'decision.made': {
-        if (line.outcome === 'allow') allow++;
-        if (line.outcome === 'write') write++;
+        if (line.outcome === 'allow') approved++;
+        if (line.outcome === 'write') declined++;
         const started = line.ticket ? awaitingAt.get(line.ticket) : undefined;
         if (started !== undefined && typeof line.at === 'number') waits.push(line.at - started);
         break;
       }
+      // Surface `prompt`: Claude Code owns the approval, so the outcome comes
+      // back afterwards from PostToolUse / PermissionDenied instead.
+      case 'decision.approved':
+        approved++;
+        break;
+      case 'decision.rejected':
+        declined++;
+        break;
     }
   }
 
@@ -100,8 +113,8 @@ export function summarise(lines: LogLine[]): Stats {
     mismatched,
     rejected,
     topRejection: top ? { reason: top[0], count: top[1] } : null,
-    allow,
-    write,
+    approved,
+    declined,
     medianWaitMs: median(waits),
   };
 }
