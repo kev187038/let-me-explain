@@ -8,6 +8,7 @@ export default defineConfig({
     'src/cli.ts',
     'src/daemon/main.ts',
     'src/hook/pretooluse.ts',
+    'src/hook/session-start.ts',
     'src/mcp/server.ts',
   ],
   format: ['esm'],

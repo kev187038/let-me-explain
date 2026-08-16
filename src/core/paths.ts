@@ -35,8 +35,12 @@ export function modePath(env: Env): string {
   return join(stateDir(env), 'mode.json');
 }
 
+export function logDir(env: Env): string {
+  return join(stateDir(env), 'log');
+}
+
 export function logPath(env: Env, sessionId: string): string {
-  return join(stateDir(env), 'log', `${sanitizeId(sessionId)}.jsonl`);
+  return join(logDir(env), `${sanitizeId(sessionId)}.jsonl`);
 }
 
 // Runtime is data that is meaningless once the machine reboots: which port

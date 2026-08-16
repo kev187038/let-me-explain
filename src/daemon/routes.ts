@@ -12,7 +12,8 @@ import { explainableLines } from '../core/lines.js';
 import { TOOL_VERSION } from '../version.js';
 import type { Logger } from './log.js';
 import type { ModeStore } from './mode.js';
-import { LEARNER_IS_WRITING, explainRequest } from './prompts.js';
+import { renderInstructions } from './instructions.js';
+import { LEARNER_IS_WRITING, explainMismatch, explainRequest } from './prompts.js';
 import type { TicketStore } from './tickets.js';
 import type { ToolNames } from './tool-name.js';
 
@@ -75,6 +76,19 @@ export function createApp(deps: DaemonDeps): Hono {
       return c.json(allow());
     }
 
+    if (found.kind === 'mismatched') {
+      await log.append({
+        type: 'explain.mismatched',
+        sessionId: event.sessionId,
+        ticket: ticket.id,
+        target: explainable.target,
+        reason: found.error,
+      });
+      return c.json(
+        deny(explainMismatch(ticket.id, toolNames.explain(), explainable.target, found.error)),
+      );
+    }
+
     if (found.kind === 'minted' || found.kind === 'awaiting_explanation') {
       await log.append({
         type: found.kind === 'minted' ? 'ticket.minted' : 'ticket.reasked',
@@ -86,6 +100,16 @@ export function createApp(deps: DaemonDeps): Hono {
       return c.json(
         deny(explainRequest(ticket.id, toolNames.explain(), explainable.lines.length)),
       );
+    }
+
+    if (found.kind === 'prebound') {
+      await log.append({
+        type: 'explain.prebound',
+        sessionId: event.sessionId,
+        ticket: ticket.id,
+        toolName: event.toolName,
+        target: explainable.target,
+      });
     }
 
     await log.append({
@@ -115,6 +139,26 @@ export function createApp(deps: DaemonDeps): Hono {
     const parsed = ExplainInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ ok: false, error: parsed.error.issues[0]?.message ?? 'invalid input' }, 400);
+    }
+
+    // No ticket means the agent is explaining ahead of the change. Shelve it;
+    // the hook binds it when the matching tool call turns up.
+    if (parsed.data.ticket === undefined) {
+      const { sessionId, target, lines, why } = parsed.data;
+      store.addPreExplanation({
+        sessionId: sessionId as string,
+        target: target as string,
+        lines,
+        why,
+        createdAt: Date.now(),
+      });
+      await log.append({
+        type: 'explain.shelved',
+        sessionId: sessionId as string,
+        target: target as string,
+        lines: lines.length,
+      });
+      return c.json({ ok: true, pending: true });
     }
 
     const ticket = store.get(parsed.data.ticket);
@@ -159,6 +203,12 @@ export function createApp(deps: DaemonDeps): Hono {
     if (typeof body?.toolName === 'string') toolNames.observe(body.toolName);
     return c.json({ ok: true, explain: toolNames.explain() });
   });
+
+  // Rendered here rather than in the hook because only the daemon knows the
+  // name the harness actually gave our MCP tool.
+  app.get('/instructions', (c) =>
+    c.text(renderInstructions({ explainTool: toolNames.explain() })),
+  );
 
   app.get('/pending', (c) => c.json({ pending: store.pending() }));
 

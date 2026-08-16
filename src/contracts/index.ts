@@ -20,12 +20,28 @@ export const LineNoteSchema = z.object({
 });
 export type LineNote = z.infer<typeof LineNoteSchema>;
 
-export const ExplainInputSchema = z.object({
-  ticket: z.string().min(1),
-  lines: z.array(LineNoteSchema),
-  why: z.string().trim().min(1),
-});
+// Either identifies a change already denied (ticket), or claims one that has
+// not happened yet (sessionId + target). One of the two must be present.
+export const ExplainInputSchema = z
+  .object({
+    ticket: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    target: z.string().min(1).optional(),
+    lines: z.array(LineNoteSchema),
+    why: z.string().trim().min(1),
+  })
+  .refine((v) => v.ticket !== undefined || (v.sessionId !== undefined && v.target !== undefined), {
+    message: 'Provide either a ticket, or the target file/command you are about to change.',
+  });
 export type ExplainInput = z.infer<typeof ExplainInputSchema>;
+
+export interface PreExplanation {
+  sessionId: string;
+  target: string;
+  lines: LineNote[];
+  why: string;
+  createdAt: number;
+}
 
 export const DecisionSchema = z.enum(['allow', 'write']);
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -88,6 +104,9 @@ export const LIMITS = {
   // A ticket that has sat unresolved this long can no longer authorise an
   // edit — the code it was minted for has probably moved on.
   ticketTtlMs: 10 * 60_000,
+  // Shorter: a pre-explanation describes a change the agent is about to make,
+  // so it is stale much sooner than a ticket for one already attempted.
+  preExplanationTtlMs: 2 * 60_000,
   // Must stay well under the harness's 600s hook budget so the agent gets a
   // decision from us rather than a timeout from the harness.
   decisionTimeoutMs: 5 * 60_000,

@@ -5,9 +5,11 @@ import {
   type Explanation,
   type HookEvent,
   type PendingView,
+  type PreExplanation,
   type Ticket,
 } from '../contracts/index.js';
 import { hashToolCall } from '../core/canonical.js';
+import { validateExplanation } from '../core/explanation.js';
 import { explainableLines } from '../core/lines.js';
 
 export type Lookup =
@@ -15,21 +17,29 @@ export type Lookup =
   | { kind: 'awaiting_explanation'; ticket: Ticket }
   | { kind: 'awaiting_decision'; ticket: Ticket }
   | { kind: 'decided'; ticket: Ticket }
-  | { kind: 'declined'; ticket: Ticket };
+  | { kind: 'declined'; ticket: Ticket }
+  | { kind: 'prebound'; ticket: Ticket }
+  | { kind: 'mismatched'; ticket: Ticket; error: string };
 
 export interface TicketStoreOptions {
   now?: () => number;
   ttlMs?: number;
+  preTtlMs?: number;
 }
 
 export function createTicketStore(opts: TicketStoreOptions = {}) {
   const now = opts.now ?? Date.now;
   const ttlMs = opts.ttlMs ?? LIMITS.ticketTtlMs;
 
+  const preTtlMs = opts.preTtlMs ?? LIMITS.preExplanationTtlMs;
+
   const byId = new Map<string, Ticket>();
   // Content identity is per session: two sessions making the byte-identical
   // edit must each get their own approval.
   const byKey = new Map<string, string>();
+  // Explanations that arrived before the change they describe, keyed the same
+  // way — the MCP server reads its session id from CLAUDE_CODE_SESSION_ID.
+  const preExplanations = new Map<string, PreExplanation>();
   const waiters = new Map<string, ((d: Decision | 'timeout') => void)[]>();
   const timers = new Map<string, NodeJS.Timeout>();
 
@@ -42,6 +52,10 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
         byId.delete(id);
         byKey.delete(key(t.sessionId, t.hash));
       }
+    }
+    const preCutoff = now() - preTtlMs;
+    for (const [k, pre] of preExplanations) {
+      if (pre.createdAt < preCutoff) preExplanations.delete(k);
     }
   }
 
@@ -101,7 +115,34 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
       };
       byId.set(ticket.id, ticket);
       byKey.set(key(ticket.sessionId, hash), ticket.id);
+
+      // A pre-explanation is a claim about content we had not seen yet, so it
+      // only binds if it actually covers the change that turned up.
+      const explainable = explainableLines(event.toolName, event.toolInput);
+      const preKey = explainable ? key(event.sessionId, explainable.target) : null;
+      const pre = preKey ? preExplanations.get(preKey) : undefined;
+
+      if (pre && explainable && preKey) {
+        preExplanations.delete(preKey);
+        const valid = validateExplanation(explainable, pre);
+        if (valid.ok) {
+          ticket.explanation = { lines: pre.lines, why: pre.why, at: pre.createdAt };
+          ticket.state = 'awaiting_decision';
+          return { kind: 'prebound', ticket };
+        }
+        return { kind: 'mismatched', ticket, error: valid.error };
+      }
+
       return { kind: 'minted', ticket };
+    },
+
+    addPreExplanation(pre: PreExplanation): void {
+      sweep();
+      preExplanations.set(key(pre.sessionId, pre.target), pre);
+    },
+
+    preExplanationCount(): number {
+      return preExplanations.size;
     },
 
     get(id: string): Ticket | undefined {

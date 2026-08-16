@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type DaemonAddress, daemonUrl, readDaemonAddress } from './core/discovery.js';
+import { logDir } from './core/paths.js';
+import { parseLogLines, summarise } from './core/stats.js';
 import { envFromProcess } from './io/env.js';
 import { TOOL_VERSION } from './version.js';
 
@@ -14,6 +18,7 @@ const USAGE = `let-me-explain ${TOOL_VERSION}
   pending             what the agent is waiting on
   allow <ticket>      let this change through
   write <ticket>      take it over and write it yourself
+  stats               how often the agent explains before being asked
 
   --session <id>      scope on/off to one session instead of globally
 `;
@@ -138,6 +143,47 @@ async function decide(ticket: string | undefined, decision: 'allow' | 'write'): 
   process.stdout.write(`${ticket}: ${decision}\n`);
 }
 
+async function stats(): Promise<void> {
+  const dir = logDir(env);
+  let files: string[];
+  try {
+    files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl'));
+  } catch {
+    process.stdout.write('no sessions logged yet\n');
+    return;
+  }
+
+  const lines = [];
+  for (const file of files) {
+    lines.push(...parseLogLines(await readFile(join(dir, file), 'utf8')));
+  }
+  const s = summarise(lines);
+
+  if (s.intercepted === 0) {
+    process.stdout.write('nothing intercepted yet\n');
+    return;
+  }
+
+  const pct = (n: number) => `${Math.round((n / s.intercepted) * 100)}%`;
+  const out = [
+    `  intercepted        ${s.intercepted}`,
+    `  explained upfront  ${s.upfront}   (${pct(s.upfront)})`,
+    `  needed a denial    ${s.denied}   (${pct(s.denied)})   <- deny-rate`,
+  ];
+  if (s.mismatched > 0) out.push(`  mismatched         ${s.mismatched}`);
+  if (s.rejected > 0) {
+    const top = s.topRejection;
+    out.push(
+      `  rejected           ${s.rejected}${top ? `   most common: ${top.reason} (${top.count})` : ''}`,
+    );
+  }
+  out.push(`  decisions          ${s.allow} allow · ${s.write} write`);
+  if (s.medianWaitMs !== null) {
+    out.push(`  median wait        ${(s.medianWaitMs / 1000).toFixed(1)}s`);
+  }
+  process.stdout.write(`${out.join('\n')}\n`);
+}
+
 async function setMode(mode: 'on' | 'off', sessionId?: string): Promise<void> {
   const address = await connected();
   await call(address, '/mode', {
@@ -168,6 +214,8 @@ async function main(): Promise<void> {
       return stop();
     case 'pending':
       return pending();
+    case 'stats':
+      return stats();
     case 'allow':
       return decide(args[1], 'allow');
     case 'write':

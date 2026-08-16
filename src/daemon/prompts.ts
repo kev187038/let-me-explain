@@ -15,6 +15,24 @@ export function explainRequest(ticket: string, tool: string, lineCount: number):
     ``,
     `Each note: under ${LIMITS.maxNoteWords} words, plain language, no jargon, say what that line does.`,
     `Then retry this exact tool call, unchanged.`,
+    ``,
+    `Next time, call \`${tool}\` with {sessionId, target} *before* the tool call and this`,
+    `round trip disappears.`,
+  ].join('\n');
+}
+
+export function explainMismatch(
+  ticket: string,
+  tool: string,
+  target: string,
+  error: string,
+): string {
+  return [
+    `[let-me-explain] Your explanation did not match what you then tried to do to ${target}.`,
+    `${error}`,
+    ``,
+    `Call \`${tool}\` again with ticket: "${ticket}" and notes for the lines this change actually`,
+    `has, then retry the tool call.`,
   ].join('\n');
 }
 
