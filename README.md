@@ -35,7 +35,7 @@ Slice 1 ships the core loop. There is no second window yet — the CLI is the in
 | 0 · Teacher and Coding Agent are one agent | ✅ shipped |
 | 1 · Explanations chunked per line | ✅ shipped (per line; per token planned) |
 | 2 · Choose which lines get explained | 📋 planned |
-| 3 · Teacher-Agent instructions | 🔶 partial — brevity enforced, instruction layer planned |
+| 3 · Teacher-Agent instructions | ✅ shipped — injected per session; personalisation planned |
 | 4 · Let-me-write | ✅ shipped |
 | 5 · Question section | 📋 planned |
 | 6 · Install as a harness plug-in | ✅ shipped (Claude Code; Codex/OpenCode planned) |
@@ -78,8 +78,22 @@ Dependencies install automatically into the plugin copy; you don't need to do an
 
 ## Try it in 60 seconds
 
-Open Claude Code in a scratch repo and ask for a small edit. The first attempt is refused and
-the agent is told what to do about it:
+Open Claude Code in a scratch repo and ask for something small. Instructions injected at session
+start teach the agent to explain first, so its edit **blocks** straight away. In another terminal:
+
+```console
+$ let-me-explain pending
+
+t_61dd5d39  Bash  shell  [awaiting_decision]
+  why: You asked for the current date saved to a file under /tmp/lme-live, which may not exist
+       yet, so the command creates the folder and then writes the date into it.
+    1 │ mkdir -p /tmp/lme-live && date > /tmp/lme-live/when.txt
+      └ Create the /tmp/lme-live folder, doing nothing if it already exists, then write today's
+        date and time into when.txt inside it.
+```
+
+If the agent forgets to explain first, its tool call is refused and the refusal tells it what to
+do — then it explains and retries:
 
 ```
 [let-me-explain] The learner reads this before it runs.
@@ -93,17 +107,15 @@ Each note: under 25 words, plain language, no jargon, say what that line does.
 Then retry this exact tool call, unchanged.
 ```
 
-The agent explains, retries, and now **blocks** waiting for you. In another terminal:
+That fallback should be rare. Check with:
 
 ```console
-$ let-me-explain pending
-
-t_1f6d21e2  Edit  /repo/auth.ts  [awaiting_decision]
-  why: Tokens never expired, so a stolen one worked forever.
-    1 │ const ttl = 900
-      └ how long the token stays valid, in seconds
-    2 │ return sign(payload, { expiresIn: ttl })
-      └ signs the token so it expires after that time
+$ let-me-explain stats
+  intercepted        1
+  explained upfront  1   (100%)
+  needed a denial    0   (0%)   <- deny-rate
+  decisions          1 allow · 0 write
+  median wait        3.3s
 ```
 
 Then either let it through, or take it over yourself:
@@ -151,6 +163,7 @@ every failure instead of only when you need it. See [docs/features/07-toggle.md]
 | `let-me-explain pending` | What the agent is waiting on, with explanations |
 | `let-me-explain allow <ticket>` | Let this change through |
 | `let-me-explain write <ticket>` | Take it over and write it yourself |
+| `let-me-explain stats` | How often the agent explains before being asked |
 | `--session <id>` | Scope `on`/`off` to one session instead of globally |
 
 Full reference: [docs/reference/cli.md](docs/reference/cli.md).
@@ -191,7 +204,7 @@ than requested in a prompt, so "every line explained" is an invariant the model 
 agent needs to explain.**
 *Why:* once you understand a pattern, re-reading it is friction. Needs the second window first.
 
-**3. 🔶 Teacher-Agent instructions.** We want the learning process as smooth as possible, so we
+**3. ✅ Teacher-Agent instructions.** We want the learning process as smooth as possible, so we
 curb the usual AI lingo: things need to be easy to explain, and explanations need to be **brief**.
 No walls of text that are an eye-sore to read. Every token, explained, simply. After this, **the
 second part is the wider context of what is being done in that command / edit to file and why**
@@ -199,7 +212,9 @@ second part is the wider context of what is being done in that command / edit to
 section. The agent also needs to stop putting useless comments above the code it makes — just the
 comment that explains the whole page, or borderline problems.
 *Why:* brevity is the whole product. Verbose teaching gets skipped, and skipped teaching is worse
-than none. Word caps are enforced today; the full instruction layer and its eval suite are planned.
+than none. The instructions are injected into every session by the `SessionStart` hook and the
+word caps are enforced at the tool boundary, so they are invariants rather than requests.
+Personalisation (role, seniority, focus areas) and an eval suite are still planned.
 
 **4. ✅ Let-me-write: the user can choose to write the command or the code themselves**, to learn
 by hand and memory as well.

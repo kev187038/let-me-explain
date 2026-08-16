@@ -29,12 +29,22 @@ This is worth naming, because it generalises: an MCP tool used as an *output cha
 an input source is how you get structured data out of a model without polluting the visible
 conversation.
 
+## The happy path
+
+The `SessionStart` hook injects instructions teaching the convention, so the agent explains
+first and nothing is wasted:
+
+```
+1. agent → explain({ target: "src/auth.ts", lines: [...], why: "..." })
+2. agent → Edit(src/auth.ts)
+3. hook  → blocks, waiting for you
+```
+
 ## The compliance problem
 
 A model can simply not call an optional tool. Instructions do not guarantee tool use, and a
-teaching plugin that silently stops teaching is worse than no plugin.
-
-The fix is a **deny-and-retry loop** in which the denial reason doubles as a prompt:
+teaching plugin that silently stops teaching is worse than no plugin. So when nothing explains a
+change, the denial reason doubles as a prompt:
 
 ```
 1. agent → Edit(src/auth.ts)
@@ -44,12 +54,14 @@ The fix is a **deny-and-retry loop** in which the denial reason doubles as a pro
 5. hook  → blocks, waiting for you
 ```
 
-Step 2 is a guard rail, not the happy path. Once the agent has learned the convention it calls
-`explain()` first and no denial occurs.
+That is the fallback, not the norm. Slice 1 shipped *only* this path — `explain()` required a
+ticket, and tickets are minted only by denials — so every single change cost a wasted call and
+sent its content twice.
 
-**Deny-rate is the health metric.** A rising deny-rate means the instruction set has drifted —
-and instructions drift invisibly, because nothing crashes when a model quietly stops following
-them. This is the number to watch when feature 3's instruction layer lands.
+**Deny-rate is the health metric**, and `let-me-explain stats` reports it: the fraction of changes
+that needed a denial. It was 100% by construction before the instruction layer existed, and 0% in
+live sessions after. A rising deny-rate means the instructions have drifted — and instructions
+drift invisibly, because nothing crashes when a model quietly stops following them.
 
 ## Why the agent never re-sends the code
 
@@ -57,11 +69,11 @@ them. This is the number to watch when feature 3's instruction layer lands.
 holds the diff from the intercepted call in step 2. Echoing the content back would roughly double
 the token cost of every edit, which directly undercuts the point of this feature.
 
-## The ticket
+## How an explanation finds its change
 
-Step 3 needs to know *which* pending change it is explaining, and the MCP server cannot work it
-out: it never learns its own `session_id`. So the hook — which does know — mints a ticket and
-hands it over inside the denial text. See [architecture.md](../architecture.md#the-ticket).
+Ahead of the change, by `(sessionId, target)` — the MCP server reads `CLAUDE_CODE_SESSION_ID`
+from its environment, which is the same id the hook reports. After a denial, by ticket. See
+[architecture.md](../architecture.md#session-identity).
 
 ## Never intercept our own tools
 
@@ -74,10 +86,12 @@ infinite regress. `src/hook/policy.ts` exempts `mcp__*__explain` and `mcp__*__an
 | Part | File |
 |---|---|
 | The `explain()` tool | `src/mcp/server.ts` |
+| Injected instructions | `src/daemon/instructions.ts`, `src/hook/session-start.ts` |
 | Denial text | `src/daemon/prompts.ts` |
-| Ticket minting and matching | `src/daemon/tickets.ts` |
+| Shelving, minting and matching | `src/daemon/tickets.ts` |
 | The exemption | `src/hook/policy.ts` |
 | Learning the real tool name | `src/daemon/tool-name.ts` |
+| Deny-rate | `src/core/stats.ts` |
 
 ## Related
 

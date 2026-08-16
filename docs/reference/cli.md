@@ -22,6 +22,7 @@ let-me-explain
   pending             what the agent is waiting on
   allow <ticket>      let this change through
   write <ticket>      take it over and write it yourself
+  stats               how often the agent explains before being asked
 
   --session <id>      scope on/off to one session instead of globally
 ```
@@ -108,6 +109,31 @@ t_1f6d21e2: write
 
 `allow` releases the blocked call and the edit lands. `write` denies it and tells the agent to
 stand down so you can write the code yourself.
+
+## `stats`
+
+Reads the JSONL session logs and reports whether the instruction layer is working.
+
+```console
+$ let-me-explain stats
+  intercepted        1
+  explained upfront  1   (100%)
+  needed a denial    0   (0%)   <- deny-rate
+  decisions          1 allow · 0 write
+  median wait        3.3s
+```
+
+**Deny-rate is the number to watch.** It is the fraction of changes the agent made without
+explaining first, so it measures whether the injected instructions are still landing. It was 100%
+before the instruction layer existed. A rising deny-rate means the instructions have drifted —
+and instructions drift silently, because nothing crashes when a model stops following them.
+
+`mismatched` appears when a pre-explanation failed to match the change that arrived, and
+`rejected` when an explanation failed validation, with the most common reason.
+
+Needs no daemon — it reads the logs directly.
+
+---
 
 Errors are plain and go to stderr with exit code 1:
 

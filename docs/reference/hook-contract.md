@@ -30,8 +30,10 @@ or the plugin fails to load with *"Duplicate hooks file detected"*.
 }
 ```
 
-- **`SessionStart`** starts the daemon. It is idempotent, and it runs *before* MCP servers
-  connect, which is fine — we never depend on that ordering.
+- **`SessionStart`** starts the daemon *and* prints the instruction block. Claude Code injects a
+  `SessionStart` hook's stdout into the session as context, so anything this hook writes, the
+  model reads — which is why it prints nothing at all on failure. It runs *before* MCP servers
+  connect, which is fine; we never depend on that ordering.
 - **`matcher`** is a regex over `tool_name`. `mcp__.*__explain` is in there deliberately: the shim
   lets our own tool through untouched, but reports the name the harness gave it so denials can
   name a tool that provably exists.
@@ -97,6 +99,10 @@ First match wins. This is the implementation order too.
 | 7 | `GET /health` fails or exceeds ~2 s | allow |
 | 8 | otherwise | `POST /hook` and return whatever it says |
 
+Step 8 is where the daemon decides: it looks for an explanation shelved ahead of the change, then
+for a ticket from a previous denial. See
+[architecture.md](../architecture.md#the-happy-path).
+
 Steps 1–7 are all fail-open. A broken plugin degrades to plain Claude Code, never to a blocked
 agent — the reasoning is in [decisions.md](../decisions.md).
 
@@ -106,11 +112,17 @@ agent — the reasoning is in [decisions.md](../decisions.md).
 
 | Pattern | Why |
 |---|---|
-| `Bash` command containing `let-me-explain` | Otherwise turning the plugin off requires sitting through an explanation of the command that turns it off |
+| `Bash` invoking our CLI with one of our subcommands | Otherwise turning the plugin off requires sitting through an explanation of the command that turns it off |
 | `mcp__*__explain`, `mcp__*__answer` | Otherwise calling `explain()` triggers a fresh interception demanding an explanation of the explanation — infinite regress |
 
-The Bash match is a substring test, which is deliberately over-permissive: it errs toward
-allowing, which is the safe direction here.
+The Bash match requires `let-me-explain` (or our `dist/cli.js`) to be the command being invoked
+**and** to be followed by one of `status|on|off|start|stop|pending|allow|write|stats`.
+
+It used to be a plain substring test, described here as "deliberately over-permissive… the safe
+direction." That was wrong, and was caught in a live session: any command mentioning a *path*
+containing `let-me-explain` was exempted, so working in a directory of that name silently
+disabled interception. A false exemption stops the product teaching; a missed exemption costs one
+explanation and is recoverable. Strict is the safe direction.
 
 ## Cost
 

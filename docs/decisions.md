@@ -16,12 +16,67 @@ are the things most likely to be "simplified" by someone who does not know why t
 **Rejected:** folding the HTTP server into the MCP server, one per session. Claude Code already
 owns that process's lifecycle, so all supervision code would disappear.
 
-**Why it lost:** the MCP server never learns its own `session_id` — Claude Code does not pass it.
-With one server per session, `explain()` can land on a different process than the one holding the
-ticket, and neither can detect it. Fixing that needs a shared ticket store between per-session
-processes, which is the daemon again.
+**Why it lost:** the daemon owns state that outlives and spans a single session — the on/off mode,
+the cross-session `stats` log, and tickets that must survive an MCP server restart. One process
+per session cannot hold any of that.
 
-**If reversed:** explanations silently attach to nothing when more than one session is open.
+> **Correction.** This entry previously said the MCP server *never learns its own `session_id`*,
+> and that the split existed to work around it. That was measured and found false: Claude Code
+> passes `CLAUDE_CODE_SESSION_ID`, identical to the hook's `session_id`. The decision survives on
+> the reasoning above; the original reasoning did not. See
+> [architecture.md](architecture.md#session-identity).
+
+**If reversed:** mode and stats fragment per session, and a restarted MCP server loses pending work.
+
+---
+
+## Explanations may arrive before the change they describe
+
+**Rejected:** requiring a ticket for every explanation, which is what slice 1 shipped.
+
+**Why it lost:** tickets are minted only by a denial, so requiring one forced *every* change
+through `attempt → denied → explain → retry`. That is a wasted round trip and the content sent
+twice, on every edit — directly against feature 0's purpose of spending fewer tokens. It also
+pinned deny-rate at 100%, making the health metric unfalsifiable.
+
+**How it is safe:** a pre-explanation is a claim about content the daemon has not seen, so it is
+validated against the real lines at bind time. A stale or mispaired one fails the coverage check
+and degrades to the deny path rather than approving the wrong change.
+
+**Measured:** deny-rate 100% → 0% in live sessions once the instruction layer shipped alongside it.
+
+---
+
+## Instructions are injected by the SessionStart hook, not written to CLAUDE.md
+
+**Rejected:** v1's approach of writing a managed block into the user's `CLAUDE.md`; also shipping
+a skill or output-style, which need invoking or selecting.
+
+**Why:** `SessionStart` stdout is injected as session context automatically, so it needs no user
+action and the text is versioned with the plugin instead of living in the user's files. Uninstall
+removes it completely.
+
+**Why the daemon renders the text** rather than the hook: only the daemon knows the name the
+harness actually gave our MCP tool. Instructions naming a tool that does not exist are worse than
+no instructions.
+
+**The constraint that shapes it:** this text is prepended to the model's context in *every*
+session, so every extra sentence costs tokens forever and dilutes attention. Target ~250 words.
+
+---
+
+## The control-command exemption matches a command, not a substring
+
+**Rejected:** `command.includes('let-me-explain')`, which slice 1 shipped and this page previously
+defended as "erring toward allowing, which is the safe direction here."
+
+**Why it lost:** found live. Any command mentioning a *path* containing `let-me-explain` was
+exempted — so working inside a directory of that name silently disabled interception. The safe
+direction was the wrong direction: a false exemption stops the product teaching, while a missed
+exemption costs one explanation and is recoverable via `LET_ME_EXPLAIN=0`.
+
+**Now:** the name must appear as the command being invoked *and* be followed by one of our
+subcommands. `grep -r let-me-explain src/` is intercepted; `let-me-explain off` is not.
 
 ---
 

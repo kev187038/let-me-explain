@@ -35,27 +35,46 @@ can reach, and because it has to outlive an individual tool call.
 
 ### Why the daemon is not folded into the MCP server
 
-This looks like an easy simplification: Claude Code already owns the MCP server's lifecycle, so
-one process per session would need no supervision code at all. **It does not work.**
+Claude Code owns the MCP server's lifecycle, so one server per session would need no supervision
+code. The daemon is still a separate singleton because it owns things that outlive and span
+sessions: the on/off mode, cross-session `stats`, and state that survives an MCP server restart.
 
-With one server per session, `explain()` can arrive at a different process than the one holding
-the ticket, and neither can detect it — because *the MCP server never learns its own
-`session_id`*. Claude Code does not pass it. Fixing that requires a shared ticket store between
-the per-session processes, which is the daemon again.
+> **Correction.** Earlier versions of this page justified the split by claiming *the MCP server
+> never learns its own `session_id`*. That is false — see below. The decision stands, but not for
+> that reason.
+
+## Session identity
+
+Both sides know the session id, which is what allows an explanation to arrive *before* the change
+it describes:
+
+| Component | Source |
+|---|---|
+| hook shim | `session_id` in the PreToolUse payload |
+| MCP server | `CLAUDE_CODE_SESSION_ID` in its environment |
+
+Measured in a live session — the two are identical:
+
+```
+hook  session_id             : c394cbf2-2b4b-4590-bc8c-0393dd9203b0
+MCP   CLAUDE_CODE_SESSION_ID : c394cbf2-2b4b-4590-bc8c-0393dd9203b0
+```
+
+Claude Code also passes `CLAUDE_PROJECT_DIR`, `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`.
 
 ## The ticket
 
-One idea carries the whole design. The hook knows `session_id`; the MCP server does not. The
-**ticket** is minted by the hook and handed to the agent inside the denial reason, so when the
-agent passes it to `explain()`, it carries the session binding with it.
+The **ticket** identifies a change that has already been attempted and denied. It is minted by the
+hook and handed to the agent inside the denial reason, so the agent can explain the exact change
+that was refused.
 
 ```ts
 ticket = { id, sessionId, cwd, toolName, toolInput, hash, state, explanation?, createdAt }
 hash   = sha256(canonicalJson({ toolName, toolInput }))
 ```
 
-The ticket does double duty: it binds an explanation to a *specific pending change* (by content
-hash) and to a *session* (because only the hook knows which one) at the same time.
+Tickets are keyed by `(sessionId, hash)`, so two sessions making a byte-identical change each get
+their own approval.
 
 `canonicalJson` sorts keys recursively. This is load-bearing: a retry is a **fresh generation**
 from the model, so key order can differ between the first attempt and the retry. Plain
@@ -77,23 +96,40 @@ awaiting_explanation ──explain()──► awaiting_decision ──allow─�
 - **TTL ~10 minutes.** A ticket that has sat unresolved that long no longer describes code that
   still matters.
 
-## The enforcement loop
+## The happy path
 
-Feature 0 has a known weakness: a model can simply not call `explain()`. Instructions do not
-guarantee tool use. The fix is a deny-and-retry loop where the denial reason doubles as a prompt:
+The `SessionStart` hook injects instructions teaching the agent to explain *before* it acts, so
+the normal sequence costs no wasted call:
 
-1. Agent calls `Edit(src/auth.ts)`.
-2. `PreToolUse` fires. No explanation for this content hash → hook returns
-   `permissionDecision: "deny"`, reason: *"Call `…__explain` with ticket=t_a1b2 first."*
-3. Agent calls `explain({ticket, lines, why})`. Only the notes travel — the daemon already has
-   the diff from step 2, so the agent never re-sends the code.
-4. Agent retries the edit. The hash matches an explained ticket → the daemon **holds the request
+1. Agent calls `explain({ target, lines, why })`. The MCP server adds the session id from its
+   environment. The daemon shelves it as a **pre-explanation**, keyed `(sessionId, target)`.
+2. Agent makes the edit. `PreToolUse` fires, finds the shelved explanation, and validates it
+   against the lines that actually turned up.
+3. It fits → the daemon mints a ticket already in `awaiting_decision` and **holds the request
    open** while you read.
-5. You decide: `allow` releases it; `write` denies with a stand-down message.
+4. You decide: `allow` releases it; `write` denies with a stand-down message.
 
-Steps 2–3 are a guard rail, not the happy path. Once the agent has learned the convention it
-calls `explain()` first and no denial happens. **Deny-rate is the health metric** for the
-instruction set — a rising deny-rate means the instructions have drifted.
+A pre-explanation is a *claim* about content the daemon has not seen yet, so step 2's validation
+is the safety story: it binds only if it covers the real change. Pre-explanations carry a short
+TTL (~2 min) and are consumed on bind, so one explanation authorises one change.
+
+## The fallback: deny and retry
+
+If the agent acts without explaining — instructions do not guarantee tool use — the denial reason
+doubles as a prompt:
+
+1. `PreToolUse` fires with nothing shelved and no matching ticket → `permissionDecision: "deny"`,
+   reason: *"Call `…__explain` with ticket=t_a1b2 first."*
+2. Agent calls `explain({ticket, lines, why})`. Only the notes travel; the daemon already has the
+   content from step 1.
+3. Agent retries. The hash matches the explained ticket → blocks for you as above.
+
+A shelved explanation that does *not* fit the change degrades to this same path, with a reason
+saying what did not match.
+
+**Deny-rate is the health metric** for the instruction set: the fraction of intercepted changes
+that needed a denial. `let-me-explain stats` reports it. It was 100% before the instruction layer
+existed, and 0% in live sessions after. A rising deny-rate means the instructions have drifted.
 
 ## Request flow
 
@@ -108,10 +144,12 @@ PreToolUse(tool, input)
   no daemon port file ............................. allow   (fail open)
   daemon fails a ~2s health check ................. allow   (fail open)
   tool has nothing explainable .................... allow
-  no ticket for hash(input) ....................... deny  "call explain, ticket=X"
-  ticket exists, not yet explained ................ deny  "call explain, ticket=X"
   ticket already declined with `write` ............ deny  "do not retry"
   ticket already approved ......................... allow   (consume it)
+  ticket exists, not yet explained ................ deny  "call explain, ticket=X"
+  pre-explanation fits this change ................ BLOCK until decision or timeout
+  pre-explanation does not fit .................... deny  "did not match", + ticket
+  nothing explains this change .................... deny  "call explain, ticket=X"
   ticket explained ................................ BLOCK until decision or timeout
         allow ..................................... allow
         write ..................................... deny  "do not retry"

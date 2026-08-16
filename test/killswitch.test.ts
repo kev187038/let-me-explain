@@ -100,10 +100,30 @@ describe('never-intercept list', () => {
     expect(isOwnMachinery('mcp__plugin_let-me-explain_lme__answer', {})).toBe(true);
   });
 
+  it('exempts our CLI invoked by path, so the switch works when installed', () => {
+    expect(
+      isOwnMachinery('Bash', {
+        command: 'node /home/x/.claude/plugins/cache/let-me-explain/let-me-explain/0.2.0/dist/cli.js off',
+      }),
+    ).toBe(true);
+  });
+
   it('still intercepts ordinary work', () => {
     expect(isOwnMachinery('Bash', { command: 'npm test' })).toBe(false);
     expect(isOwnMachinery('Edit', { file_path: '/a.ts' })).toBe(false);
     expect(isOwnMachinery('mcp__other__explain_thing', {})).toBe(false);
+  });
+
+  // Found live: the substring test exempted every command mentioning a path
+  // that contained the project name, silently disabling interception.
+  it('does not exempt a command that merely mentions the name in a path', () => {
+    expect(
+      isOwnMachinery('Bash', { command: 'chmod +x /tmp/stuff-let-me-explain/scratch/greet.sh' }),
+    ).toBe(false);
+    expect(isOwnMachinery('Bash', { command: 'cd ~/Desktop/let-me-explain && npm test' })).toBe(
+      false,
+    );
+    expect(isOwnMachinery('Bash', { command: 'grep -r let-me-explain src/' })).toBe(false);
   });
 });
 

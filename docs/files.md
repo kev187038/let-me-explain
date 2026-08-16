@@ -39,10 +39,21 @@ shape; the description shapes behaviour.
 and it corrects itself. That is the self-repair loop — no retry code of ours involved.
 
 ### `src/cli.ts`
-`status`, `on`/`off`, `start`/`stop`, `pending`, `allow`, `write`.
+`status`, `on`/`off`, `start`/`stop`, `pending`, `allow`, `write`, `stats`.
 
 **Why it renders pending work with the code inline:** until the second window exists, this *is*
 the product's interface. `pending` and `allow` are not debugging aids — they are feature 4.
+
+### `src/hook/session-start.ts`
+Runs at session start: makes sure the daemon is up, fetches the instruction text, prints it.
+
+**Why it prints nothing but the instructions:** Claude Code injects a `SessionStart` hook's
+stdout into the session as context. The previous version ran `cli.js start`, which printed
+`"started"` — that string was going into every session's context. Anything this hook writes, the
+model reads.
+
+**Why it fails silently:** a session with no instructions still works; a session with a crashed
+hook is worse.
 
 ---
 
@@ -85,6 +96,17 @@ The strings sent back to the agent.
 **Why these live in their own file:** they are *prompts*, not error messages. They are the only
 thing steering the model back into the loop, and wording changes here change behaviour. They
 deserve to be found, diffed and iterated on without hunting through route handlers.
+
+### `src/daemon/instructions.ts`
+Renders the text injected into every session.
+
+**Why it lives in the daemon** and not in the hook that prints it: only the daemon knows the name
+the harness actually gave our MCP tool (see `tool-name.ts`). Instructions that name a tool which
+does not exist are worse than none.
+
+**Why it is deterministic and short:** same input → byte-identical output, so it is
+snapshot-testable; and it is prepended to the model's context in *every* session, so every extra
+sentence costs tokens forever and dilutes attention. A test asserts it stays under 320 words.
 
 ### `src/daemon/tool-name.ts`
 Learns the real name the harness gave our MCP tool.
@@ -153,6 +175,16 @@ Parses and resolves the on/off mode. Shared by daemon and shim.
 also means the off switch keeps working when the daemon is wedged, which is exactly when you most
 want it.
 
+### `src/core/stats.ts`
+Aggregates the JSONL event log into the numbers `let-me-explain stats` prints.
+
+**Why it is a pure function over parsed lines**, with the file reading left to the CLI: it is
+unit-testable against fixture strings with no filesystem, which is how the deny-rate arithmetic
+and the wait-time median are checked.
+
+**Why it tolerates a truncated last line:** the log is appended to while being read. Refusing to
+report because of a half-written line would make the metric useless exactly when it is busiest.
+
 ### `src/core/paths.ts`
 XDG path resolution.
 
@@ -197,7 +229,7 @@ discipline.
 | File | Why |
 |---|---|
 | `src/contracts/index.ts` | One wire vocabulary shared by daemon, MCP server and shim. A harness adapter's whole job becomes mapping its payload onto these, which is what makes Codex/OpenCode cheap later. Also holds `LIMITS` — the word caps that make feature 3 testable |
-| `src/hook/policy.ts` | The never-intercept list. Extracted from the shim purely so it is unit-testable without a build step |
+| `src/hook/policy.ts` | The never-intercept list. Extracted from the shim purely so it is unit-testable without a build step. Its regex requires our name *as the command* plus one of our subcommands — a plain substring test exempted every command that merely mentioned a path containing `let-me-explain`, which was found live |
 | `src/version.ts` | Reads `__TOOL_VERSION__`, injected by tsup at build time and by Vitest's `define`; falls back to `'dev'` under `tsx` where neither applies |
 | `src/globals.d.ts` | Declares that injected global for TypeScript |
 
@@ -213,6 +245,8 @@ discipline.
 | `test/explanation.test.ts` | Line extraction per tool, and every validation rejection |
 | `test/killswitch.test.ts` | Modes, the never-intercept list, and that the shim fails open |
 | `test/shim.test.ts` | **The positive control** — a real daemon and a real shim producing a *deny*. Every other shim test asserts `allow`, which a shim that did nothing would also pass |
+| `test/prebind.test.ts` | Explaining before the change: binding, one-change-per-explanation, the coverage-mismatch fallback, session and target scoping, and that the instruction text stays short |
+| `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
 
 ---
 

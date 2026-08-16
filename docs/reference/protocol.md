@@ -73,24 +73,51 @@ An unparseable body returns `allow` rather than an error — see the fail-open r
 
 ## `POST /explain`
 
-Attach an explanation to a pending ticket. Called by the MCP server on the agent's behalf.
+Called by the MCP server on the agent's behalf, in one of two forms.
+
+**Ahead of the change** (the normal path) — identified by session and target:
 
 ```json
 {
-  "ticket": "t_1f6d21e2",
+  "sessionId": "c394cbf2-…",
+  "target": "/repo/auth.ts",
   "lines": [{ "n": 1, "note": "how long the token stays valid, in seconds" }],
   "why": "Tokens never expired, so a stolen one worked forever."
 }
 ```
 
+Returns `200 {"ok":true,"pending":true}`. Nothing is validated yet — the notes describe content
+the daemon has not seen. It is shelved under `(sessionId, target)` with a ~2 minute TTL, and
+checked when the matching tool call arrives.
+
+**After a denial** (the fallback) — identified by ticket:
+
+```json
+{ "ticket": "t_1f6d21e2", "lines": [...], "why": "..." }
+```
+
 | Status | Body | When |
 |---|---|---|
 | `200` | `{"ok":true,"ticket":"t_…"}` | accepted; the ticket moves to `awaiting_decision` |
-| `400` | `{"ok":false,"error":"Missing notes for line(s): 2. …"}` | failed validation |
+| `200` | `{"ok":true,"pending":true}` | shelved ahead of the change |
+| `400` | `{"ok":false,"error":"Missing notes for line(s): 2. …"}` | failed validation, or neither a ticket nor a target was given |
 | `404` | `{"ok":false,"error":"Unknown or expired ticket \"t_…\". Retry the tool call to get a fresh one."}` | no such ticket, or it aged out |
 
 The `error` strings are surfaced verbatim to the agent as a tool error, so it can self-correct.
 Rules enforced: [features/01-line-explanations.md](../features/01-line-explanations.md).
+
+The MCP server fills in `sessionId` itself from `CLAUDE_CODE_SESSION_ID`; the model never supplies
+it.
+
+---
+
+## `GET /instructions`
+
+Returns the instruction block as `text/plain`. The `SessionStart` hook prints this to stdout,
+which Claude Code injects into the session as context.
+
+Rendered by the daemon rather than the hook because only the daemon knows the name the harness
+gave our MCP tool.
 
 ---
 
