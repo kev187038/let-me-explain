@@ -1,1 +1,0 @@
-declare const __TOOL_VERSION__: string;
