@@ -32,8 +32,9 @@ How to write the notes:
   restatement of the code.
 
 The learner then approves or rejects the tool call. If they reject, read what they say:
-- If they say they will write it themselves, stop. Do not retry and do not write the file.
-  Wait for them to say they are done, then read the file to see what they actually wrote.
+- If they say they will write it themselves, call let_me_try with that file as \`target\`, then
+  retry the tool call. It pauses while they type and comes back with what they wrote. If it says
+  they are still typing, retry again. Never write the file for them.
 - If they ask a question, answer it plainly first, then retry the tool call.
 
 While this is active, do not add explanatory comments to the code you write. The explanation

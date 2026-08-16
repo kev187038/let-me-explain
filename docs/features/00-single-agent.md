@@ -96,6 +96,6 @@ infinite regress. `src/hook/policy.ts` exempts `mcp__*__explain` and `mcp__*__an
 ## Related
 
 - [features/01-line-explanations.md](01-line-explanations.md) — what a valid explanation must contain
-- [features/04-let-me-write.md](04-let-me-write.md) — what happens after the block
+- [features/04-let-me-try.md](04-let-me-try.md) — what happens after the block
 - [architecture.md](../architecture.md) — the enforcement loop in context
 - [decisions.md](../decisions.md) — why the denial reason is written as a prompt

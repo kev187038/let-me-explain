@@ -44,7 +44,7 @@ editor panel — needed for choosing which lines get explained — is still ahea
 | 1 · Explanations chunked per line | ✅ shipped (per line; per token planned) |
 | 2 · Choose which lines get explained | 📋 planned |
 | 3 · Teacher-Agent instructions | ✅ shipped — injected per session; personalisation planned |
-| 4 · Let-me-write | ✅ shipped — reject the prompt and say so |
+| 4 · Let-me-try | ✅ shipped — a tutorial opens beside the file and you type it |
 | 5 · Question section | 🔶 partial — reject with a question and the agent answers |
 | 6 · Install as a harness plug-in | ✅ shipped (Claude Code; Codex/OpenCode planned) |
 | 7 · Enable / disable toggle | 🔶 partial — `on`/`off` shipped, `observe` planned |
@@ -60,7 +60,7 @@ Requires **Node ≥ 20.11** and Claude Code. `dist/` is not committed, so you bu
 install — the installer copies your working tree as-is.
 
 ```bash
-git clone <this-repo> let-me-explain
+git clone https://github.com/kev187038/let-me-explain.git
 cd let-me-explain
 npm install
 npm run build
@@ -83,6 +83,37 @@ $ claude plugin list
 ```
 
 Dependencies install automatically into the plugin copy; you don't need to do anything else.
+
+### Optional: the VS Code button
+
+Everything works without this. It adds one thing: a status-bar button that appears while
+[let-me-try](docs/features/04-let-me-try.md) is waiting on you, so finishing is a click instead
+of ticking a checkbox.
+
+```bash
+cd vscode-extension
+npm install
+npm run package                                    # → let-me-explain-0.1.0.vsix
+code --install-extension let-me-explain-0.1.0.vsix
+```
+
+Then reload VS Code (`Ctrl+Shift+P` → *Developer: Reload Window*). Check it landed:
+
+```console
+$ code --list-extensions | grep let-me-explain
+gabi.let-me-explain
+```
+
+While a try is running you get:
+
+```
+ …  TS  ⚡ Prettier   ✓ I'm done — auth.ts
+                        ↑ click, and Claude reviews your work
+```
+
+It is hidden the rest of the time. Without it, the tutorial's checkbox and `let-me-explain done`
+both still work — see [Turning it off](#turning-it-off) for removing the plugin entirely, or
+`code --uninstall-extension gabi.let-me-explain` for just this.
 
 ## Try it in 60 seconds
 
@@ -165,13 +196,15 @@ every failure instead of only when you need it. See [docs/features/07-toggle.md]
 | `let-me-explain start` / `stop` | Run or stop the background daemon |
 | `let-me-explain pending` | What the agent is waiting on, with explanations |
 | `let-me-explain allow <ticket>` | Let this change through |
-| `let-me-explain write <ticket>` | Take it over and write it yourself |
+| `let-me-explain try <ticket>` | Take it over and type it yourself |
+| `let-me-explain done` | Tell Claude you have finished typing |
+| `let-me-explain clean [--list]` | Remove tutorial files (or just list them) |
 | `let-me-explain stats` | How often the agent explains before being asked |
 | `let-me-explain surface prompt\|window` | Explain inline in Claude Code, or hold changes for the CLI |
 | `--session <id>` | Scope settings to one session instead of globally |
 
 `surface prompt` is the default and what a learner wants. `surface window` holds each change
-instead, so you inspect it with `pending` and answer with `allow` / `write` — useful for
+instead, so you inspect it with `pending` and answer with `allow` / `try` — useful for
 scripting, and the groundwork for a future editor panel.
 
 Full reference: [docs/reference/cli.md](docs/reference/cli.md).
@@ -224,11 +257,13 @@ than none. The instructions are injected into every session by the `SessionStart
 word caps are enforced at the tool boundary, so they are invariants rather than requests.
 Personalisation (role, seniority, focus areas) and an eval suite are still planned.
 
-**4. ✅ Let-me-write: the user can choose to write the command or the code themselves**, to learn
+**4. ✅ Let-me-try: the user can choose to write the command or the code themselves**, to learn
 by hand and memory as well.
-*Why:* reading an explanation and being able to write the thing are different skills. The denial
-tells the agent to stand down and not retry —
-[docs/features/04-let-me-write.md](docs/features/04-let-me-write.md).
+*Why:* reading an explanation and being able to write the thing are different skills, and only the
+second survives. Reject a change and say you will write it: a tutorial with the code and the
+per-line notes opens beside the file in your editor, you type it, and Claude reviews what you
+wrote against what it intended —
+[docs/features/04-let-me-try.md](docs/features/04-let-me-try.md).
 
 **5. 📋 Question section:** a separated section for any question the user wants to ask on the
 code/command being done.
@@ -325,7 +360,7 @@ affects another.
 ## Future features
 
 1. **VS Code panel** as a second front-end. The daemon's REST surface already is the extension's
-   backend, so this is a webview client rather than a rewrite — and it gives the let-me-write
+   backend, so this is a webview client rather than a rewrite — and it gives the let-me-try
    feature a real editor to write in.
 2. Codex and OpenCode adapters. Both expose PreToolUse-style interception, so they are new
    mappings onto the wire contracts, not new plumbing.

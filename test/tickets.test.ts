@@ -59,7 +59,7 @@ describe('ticket store', () => {
     const store = createTicketStore();
     const { ticket } = store.lookup(event());
     store.attachExplanation(ticket.id, explanation);
-    store.decide(ticket.id, 'write');
+    store.decide(ticket.id, 'try');
 
     const retry = store.lookup(event());
     expect(retry.kind).toBe('declined');
@@ -111,7 +111,7 @@ describe('ticket store', () => {
     const store = createTicketStore();
     const { ticket } = store.lookup(event());
     store.attachExplanation(ticket.id, explanation);
-    store.decide(ticket.id, 'write');
+    store.decide(ticket.id, 'try');
     expect(store.attachExplanation(ticket.id, explanation)).toBe(false);
   });
 

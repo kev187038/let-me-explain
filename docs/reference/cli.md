@@ -1,7 +1,7 @@
 ---
 title: CLI reference
 status: shipped
-relates_to: [reference/protocol, features/04-let-me-write, features/07-toggle, development]
+relates_to: [reference/protocol, features/04-let-me-try, features/07-toggle, development]
 ---
 
 # CLI reference
@@ -22,7 +22,9 @@ let-me-explain
   start | stop        run the background daemon
   pending             what the agent is waiting on
   allow <ticket>      let this change through
-  write <ticket>      take it over and write it yourself
+  try <ticket>        take it over and type it yourself
+  done                tell Claude you have finished typing
+  clean [--list]      remove tutorial files (or just list them)
   stats               how often the agent explains before being asked
   surface <where>     prompt (inline in Claude Code) or window (held for the CLI)
 
@@ -99,18 +101,54 @@ nothing waiting
 `[awaiting_explanation]` means the agent has not explained yet — there is nothing for you to
 decide on, and lines appear without notes.
 
-## `allow <ticket>` · `write <ticket>`
+## `allow <ticket>` · `try <ticket>`
 
 ```console
 $ let-me-explain allow t_1f6d21e2
 t_1f6d21e2: allow
 
-$ let-me-explain write t_1f6d21e2
-t_1f6d21e2: write
+$ let-me-explain try t_1f6d21e2
+t_1f6d21e2: try
 ```
 
-`allow` releases the blocked call and the edit lands. `write` denies it and tells the agent to
-stand down so you can write the code yourself.
+`allow` releases the blocked call and the edit lands. `try` hands it to you: a tutorial opens
+beside the file and you type it yourself — see
+[features/04-let-me-try.md](../features/04-let-me-try.md).
+
+## `done`
+
+Ends a `try` immediately instead of ticking the tutorial's checkbox.
+
+```console
+$ let-me-explain done
+handed /repo/src/auth.ts back to Claude
+```
+
+No arguments needed: with one try in flight it finishes that one. With several it refuses rather
+than guessing, and tells you how to choose:
+
+```console
+$ let-me-explain done
+let-me-explain: more than one is waiting: /repo/a.ts, /repo/b.ts. Name one with --target.
+
+$ let-me-explain done --target src/a.ts
+handed /repo/src/a.ts back to Claude
+```
+
+Exits 1 with a plain message when nothing is waiting.
+
+## `clean [--list]`
+
+Removes tutorial files. They are also cleaned when a try finishes, when the session ends, and by
+age at daemon start — this is for clearing the rest by hand.
+
+```console
+$ let-me-explain clean --list
+/home/you/.local/state/let-me-explain/tutorials/abc123/TRY-auth.ts.md
+
+$ let-me-explain clean
+removed 1 tutorial file(s)
+```
 
 ## `surface`
 
@@ -185,6 +223,6 @@ Full table: [root README](../../README.md#environment-variables).
 ## Related
 
 - [reference/protocol.md](protocol.md) — the routes these commands call
-- [features/04-let-me-write.md](../features/04-let-me-write.md) — `pending` / `allow` / `write` in context
+- [features/04-let-me-try.md](../features/04-let-me-try.md) — `pending` / `allow` / `write` in context
 - [features/07-toggle.md](../features/07-toggle.md) — `on` / `off` in context
 - [development.md](../development.md) — driving the daemon with `curl` instead

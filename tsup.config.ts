@@ -10,6 +10,7 @@ export default defineConfig({
     'src/hook/pretooluse.ts',
     'src/hook/session-start.ts',
     'src/hook/outcome.ts',
+    'src/hook/session-end.ts',
     'src/mcp/server.ts',
   ],
   format: ['esm'],

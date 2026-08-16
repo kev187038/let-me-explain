@@ -98,7 +98,7 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
         }
         // The learner took this one over by hand; keep saying so until the
         // ticket ages out, rather than restarting the explain dance.
-        if (existing.decision === 'write') return { kind: 'declined', ticket: existing };
+        if (existing.decision === 'try') return { kind: 'declined', ticket: existing };
         if (existing.decision === 'allow') return { kind: 'decided', ticket: existing };
         drop(existing);
       }

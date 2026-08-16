@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tgz
+vscode-extension/out/
+vscode-extension/node_modules/
+*.vsix

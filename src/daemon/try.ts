@@ -1,0 +1,230 @@
+import { spawn } from 'node:child_process';
+import { type FSWatcher, watch } from 'node:fs';
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
+import { accessSync, constants } from 'node:fs';
+import type { PendingView } from '../contracts/index.js';
+import { type LaunchEnv, planLaunch } from '../core/open-editor.js';
+import { type Env, tutorialDir, tutorialPath } from '../core/paths.js';
+import { isFinished, renderTutorial } from '../core/tutorial.js';
+import type { FsIo } from '../io/fs-io.js';
+
+// Reading the tutorial back after a save is cheap, but editors can emit
+// several events for one write; this collapses them.
+const SETTLE_MS = 50;
+
+export interface TryOutcome {
+  status: 'done' | 'waiting';
+  target: string;
+  yours: string;
+  theirs: string;
+  tutorial: string;
+}
+
+export interface SessionEnv {
+  termProgram?: string;
+  claudeSsePort?: string;
+  editor?: string;
+}
+
+function onPath(command: string): boolean {
+  const dirs = (process.env.PATH ?? '').split(':').filter(Boolean);
+  return dirs.some((dir) => {
+    try {
+      accessSync(resolve(dir, command), constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+export type Launcher = (
+  env: LaunchEnv,
+  paths: { tutorialPath: string; targetPath: string; line: number },
+) => void;
+
+// Injected so tests never open a real window.
+export const spawnLauncher: Launcher = (env, paths) => {
+  for (const { command, args } of planLaunch(env, paths)) {
+    try {
+      spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
+    } catch {
+      // A window that will not open must not take the session down with it.
+    }
+  }
+};
+
+export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLauncher) {
+  interface Attempt {
+    target: string;
+    tutorial: string;
+    theirs: string;
+    waiters: ((o: TryOutcome) => void)[];
+    watcher?: FSWatcher;
+    quiet?: NodeJS.Timeout;
+    deadline?: NodeJS.Timeout;
+  }
+
+  const attempts = new Map<string, Attempt>();
+  const key = (sessionId: string, target: string) => `${sessionId}:${target}`;
+
+  async function settle(id: string, status: TryOutcome['status']): Promise<void> {
+    const attempt = attempts.get(id);
+    if (!attempt) return;
+
+    if (attempt.quiet) clearTimeout(attempt.quiet);
+    if (attempt.deadline) clearTimeout(attempt.deadline);
+    attempt.deadline = undefined;
+    attempt.watcher?.close();
+
+    const yours = await readFile(attempt.target, 'utf8').catch(() => '');
+    const outcome: TryOutcome = {
+      status,
+      target: attempt.target,
+      yours,
+      theirs: attempt.theirs,
+      tutorial: attempt.tutorial,
+    };
+
+    for (const resolveWaiter of attempt.waiters) resolveWaiter(outcome);
+    attempt.waiters = [];
+
+    if (status === 'done') {
+      attempts.delete(id);
+      // The tutorial has served its purpose the moment the try ends.
+      await rm(attempt.tutorial, { force: true }).catch(() => {});
+    }
+  }
+
+  return {
+    // Waiting is separate from opening because the two happen in different
+    // places: `let_me_try` opens and returns at once, and the *hook* on the
+    // agent's retry is what parks. The hook has a far larger timeout budget
+    // than an MCP call, so the learner gets one long wait instead of dozens of
+    // short ones. Returns null when no try is in flight for this target.
+    waitFor(sessionId: string, target: string, timeoutMs: number): Promise<TryOutcome> | null {
+      const id = key(sessionId, target);
+      const attempt = attempts.get(id);
+      if (!attempt) return null;
+      return new Promise<TryOutcome>((resolveWaiter) => {
+        attempt.waiters.push(resolveWaiter);
+        // One deadline per attempt, re-armed by each new wait. Leaving the old
+        // timer running would let a deadline armed by an earlier retry cut a
+        // later one short, shrinking the budget every time.
+        if (attempt.deadline) clearTimeout(attempt.deadline);
+        attempt.deadline = setTimeout(() => void settle(id, 'waiting'), timeoutMs);
+        attempt.deadline.unref();
+      });
+    },
+
+    inFlight(sessionId: string, target: string): boolean {
+      return attempts.has(key(sessionId, target));
+    },
+
+    async begin(
+      view: PendingView,
+      sessionId: string,
+      cwd: string,
+      sessionEnv: SessionEnv,
+    ): Promise<{ tutorial: string; target: string }> {
+      const id = key(sessionId, view.target);
+      const existing = attempts.get(id);
+      if (existing) return { tutorial: existing.tutorial, target: existing.target };
+
+      const targetPath = resolve(cwd, view.target);
+      const tutorial = tutorialPath(env, sessionId, view.target);
+      const theirs = view.lines.map((l) => l.code).join('\n');
+
+      await mkdir(tutorialDir(env, sessionId), { recursive: true });
+      await io.writeFileAtomic(
+        tutorial,
+        renderTutorial({ target: view.target, ...(view.why ? { why: view.why } : {}), lines: view.lines }),
+      );
+
+      // Created empty first so the editor never opens a phantom buffer.
+      await mkdir(dirname(targetPath), { recursive: true }).catch(() => {});
+      if (!(await io.fileExists(targetPath))) await io.writeFileAtomic(targetPath, '');
+
+      const attempt: Attempt = { target: targetPath, tutorial, theirs, waiters: [] };
+      attempts.set(id, attempt);
+
+      launch(
+        { platform: process.platform, has: onPath, ...sessionEnv },
+        { tutorialPath: tutorial, targetPath, line: 1 },
+      );
+
+      // The *tutorial* is watched, not the code file. A pause in typing is
+      // thinking, not finishing — the learner says when they are done by
+      // ticking the checkbox at the bottom of the tutorial.
+      try {
+        const name = basename(tutorial);
+        attempt.watcher = watch(dirname(tutorial), (_event, changed) => {
+          if (changed !== name) return;
+          if (attempt.quiet) clearTimeout(attempt.quiet);
+          attempt.quiet = setTimeout(() => {
+            void readFile(tutorial, 'utf8')
+              .then((text) => {
+                if (isFinished(text)) void settle(id, 'done');
+              })
+              .catch(() => {});
+          }, SETTLE_MS);
+        });
+      } catch {
+        // No watcher: `let-me-explain done` still works.
+      }
+
+      return { tutorial, target: targetPath };
+    },
+
+    // Callers usually know neither the session id nor the target — the learner
+    // types `let-me-explain done` and expects the obvious thing to happen. Only
+    // ask them to disambiguate when there genuinely is a choice.
+    async finish(
+      sessionId?: string,
+      target?: string,
+    ): Promise<{ ok: true; target: string } | { ok: false; error: string }> {
+      const candidates = [...attempts.entries()].filter(([id]) => {
+        if (sessionId && !id.startsWith(`${sessionId}:`)) return false;
+        if (target && !id.endsWith(`:${target}`)) return false;
+        return true;
+      });
+
+      if (candidates.length === 0) return { ok: false, error: 'nothing is waiting on you' };
+      if (candidates.length > 1) {
+        const targets = candidates.map(([, a]) => a.target).join(', ');
+        return { ok: false, error: `more than one is waiting: ${targets}. Name one with --target.` };
+      }
+
+      const [id, attempt] = candidates[0] as [string, Attempt];
+      await settle(id, 'done');
+      return { ok: true, target: attempt.target };
+    },
+
+    active(): number {
+      return attempts.size;
+    },
+
+    list(): { sessionId: string; target: string; tutorial: string }[] {
+      return [...attempts.entries()].map(([id, attempt]) => {
+        const split = id.indexOf(':');
+        return {
+          sessionId: id.slice(0, split),
+          target: attempt.target,
+          tutorial: attempt.tutorial,
+        };
+      });
+    },
+
+    close(): void {
+      for (const attempt of attempts.values()) {
+        if (attempt.quiet) clearTimeout(attempt.quiet);
+        if (attempt.deadline) clearTimeout(attempt.deadline);
+        attempt.watcher?.close();
+      }
+      attempts.clear();
+    },
+  };
+}
+
+export type TryStore = ReturnType<typeof createTryStore>;

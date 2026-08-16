@@ -43,9 +43,10 @@ wedged daemon fails here and the call is allowed.
 
 ## `POST /hook`
 
-The intercepted tool call. Under `surface: prompt` it answers immediately with `ask`. Under
-`surface: window` **it may block for minutes** — that is the point — resolving when a decision
-arrives or after the 5-minute timeout.
+The intercepted tool call. It answers immediately with `ask` under `surface: prompt`, and blocks
+under `surface: window` or while a **let-me-try** is in flight for that target — in the latter
+case for as long as the hook's configured timeout allows, ending when the learner stops typing.
+Neither try outcome ever returns `allow`: running the tool would overwrite what they wrote.
 
 **Request** — a harness-neutral `HookEvent`:
 
@@ -156,6 +157,32 @@ Resolve a blocked call. `{"ticket":"t_…","decision":"allow"|"write"}`.
 
 You may decide *before* the agent retries. The decision is stored on the ticket, so the later
 retry picks it up instead of parking.
+
+---
+
+## `POST /try` · `POST /done`
+
+`/try` takes `{sessionId, target, cwd, termProgram?, claudeSsePort?, editor?}`. It writes the
+tutorial, opens the learner's editor, and **returns immediately** with `{ok, status:"open"}`.
+Calling it again while one is open is a no-op rather than a second editor window.
+
+The waiting happens in `POST /hook` on the agent's retry, because a hook's timeout budget is set
+by us while an MCP request is capped at the SDK's 60 s default.
+
+`404` when nothing is pending for that target — the change has to be proposed and explained first.
+
+`/done` takes `{sessionId, target?}` and ends the wait immediately. `{ok:false}` if nothing was
+waiting.
+
+The environment fields come from the **MCP server**, not the daemon: the daemon may have been
+started by a different session with a different editor.
+
+---
+
+## `POST /clean` · `GET /tutorials`
+
+`/clean` with `{sessionId}` removes that session's tutorials, or with `{}` removes all. Returns
+`{ok, removed}`. `/tutorials` lists the paths.
 
 ---
 

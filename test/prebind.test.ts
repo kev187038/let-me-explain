@@ -10,6 +10,7 @@ import { createLogger } from '../src/daemon/log.js';
 import { createModeStore } from '../src/daemon/mode.js';
 import { createApp } from '../src/daemon/routes.js';
 import { createTicketStore, type TicketStore } from '../src/daemon/tickets.js';
+import { createTryStore } from '../src/daemon/try.js';
 import { createToolNames } from '../src/daemon/tool-name.js';
 import { fsIo } from '../src/io/fs-io.js';
 
@@ -57,6 +58,8 @@ beforeEach(async () => {
   await mode.setSurface('window');
   app = createApp({
     store,
+    tries: createTryStore(env, fsIo, () => {}),
+    env,
     mode,
     log: createLogger(fsIo, env),
     toolNames: createToolNames(),

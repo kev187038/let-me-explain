@@ -28,7 +28,7 @@ one thing and links to the pages it depends on, so you can arrive anywhere and w
 | 1 · Per-line explanations | ✅ | [features/01-line-explanations.md](features/01-line-explanations.md) |
 | 2 · Choose which lines to explain | 📋 | — needs the second window |
 | 3 · Teacher-Agent instructions | 🔶 | — brevity caps live in feature 1 today |
-| 4 · Let-me-write | ✅ | [features/04-let-me-write.md](features/04-let-me-write.md) |
+| 4 · Let-me-try | ✅ | [features/04-let-me-try.md](features/04-let-me-try.md) |
 | 5 · Question section | 📋 | — needs `answer()` and the second window |
 | 6 · Install as a plug-in | ✅ | [development.md](development.md) |
 | 7 · Enable / disable toggle | 🔶 | [features/07-toggle.md](features/07-toggle.md) |

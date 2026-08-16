@@ -86,7 +86,8 @@ export function summarise(lines: LogLine[]): Stats {
       // Surface `window`: the daemon held the request and knows the answer.
       case 'decision.made': {
         if (line.outcome === 'allow') approved++;
-        if (line.outcome === 'write') declined++;
+        // 'write' is the pre-rename value, still present in older logs.
+        if (line.outcome === 'try' || line.outcome === 'write') declined++;
         const started = line.ticket ? awaitingAt.get(line.ticket) : undefined;
         if (started !== undefined && typeof line.at === 'number') waits.push(line.at - started);
         break;

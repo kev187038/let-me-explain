@@ -105,6 +105,28 @@ gave up. Metrics that quietly stop being fed are more dangerous than metrics you
 
 ---
 
+## The learner's typing is waited on in the hook, not in an MCP call
+
+**Rejected:** blocking inside the `let_me_try` MCP tool, which is what shipped first.
+
+**Why it lost:** the MCP SDK caps a request at 60 s (`DEFAULT_REQUEST_TIMEOUT_MSEC`), so a call
+could only wait ~45 s before returning "still typing" for the agent to call again. Correct, but a
+thirty-minute session became ~40 idle round trips — latency, tokens, and a transcript full of
+nothing. The `PreToolUse` hook's budget is ours to set in `hooks.json`, so the same wait costs one
+call.
+
+**What made it safe:** the daemon's own wait is kept below the hook timeout so we answer first. If
+the harness killed the hook it would treat that as a non-blocking error and let the tool run,
+overwriting the file the learner had just typed — so this is the one place the fail-open rule is
+deliberately inverted. Both outcomes deny.
+
+**Still bounded, though.** The unbounded wait in the harness is the approval prompt, which has no
+timeout at all because it waits on a human. Using it here would need "Yes" to mean something
+harmless, which costs putting `Read` in the hook matcher — ~22 ms on the most frequent tool in the
+system. Rejected for now; revisit if the hook budget proves too small.
+
+---
+
 ## The control-command exemption matches a command, not a substring
 
 **Rejected:** `command.includes('let-me-explain')`, which slice 1 shipped and this page previously

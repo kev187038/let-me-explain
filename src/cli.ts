@@ -17,7 +17,9 @@ const USAGE = `let-me-explain ${TOOL_VERSION}
   start | stop        run the background daemon
   pending             what the agent is waiting on
   allow <ticket>      let this change through
-  write <ticket>      take it over and write it yourself
+  try <ticket>        take it over and type it yourself
+  done [--target <f>] tell Claude you have finished typing
+  clean [--list]      remove tutorial files (or just list them)
   stats               how often the agent explains before being asked
   surface <where>     prompt (inline in Claude Code) or window (held for the CLI)
 
@@ -135,7 +137,7 @@ async function pending(): Promise<void> {
   process.stdout.write('\n');
 }
 
-async function decide(ticket: string | undefined, decision: 'allow' | 'write'): Promise<void> {
+async function decide(ticket: string | undefined, decision: 'allow' | 'try'): Promise<void> {
   if (!ticket) fail(`usage: let-me-explain ${decision} <ticket>`);
   const address = await connected();
   await call(address, '/decision', {
@@ -184,6 +186,35 @@ async function stats(): Promise<void> {
     out.push(`  median wait        ${(s.medianWaitMs / 1000).toFixed(1)}s`);
   }
   process.stdout.write(`${out.join('\n')}\n`);
+}
+
+async function done(sessionId?: string, target?: string): Promise<void> {
+  const address = await connected();
+  const body = (await call(address, '/done', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(sessionId ? { sessionId } : {}),
+      ...(target ? { target } : {}),
+    }),
+  })) as { ok: boolean; target?: string; error?: string };
+
+  if (!body.ok) fail(`let-me-explain: ${body.error ?? 'nothing is waiting on you'}`);
+  process.stdout.write(`handed ${body.target} back to Claude\n`);
+}
+
+async function clean(listOnly: boolean): Promise<void> {
+  const address = await connected();
+  if (listOnly) {
+    const { tutorials } = (await call(address, '/tutorials')) as { tutorials: string[] };
+    process.stdout.write(
+      tutorials.length === 0 ? 'no tutorial files\n' : `${tutorials.join('\n')}\n`,
+    );
+    return;
+  }
+  const { removed } = (await call(address, '/clean', { method: 'POST', body: '{}' })) as {
+    removed: number;
+  };
+  process.stdout.write(`removed ${removed} tutorial file(s)\n`);
 }
 
 async function setSurface(surface: string | undefined, sessionId?: string): Promise<void> {
@@ -238,8 +269,14 @@ async function main(): Promise<void> {
       return setSurface(args[1], sessionId);
     case 'allow':
       return decide(args[1], 'allow');
-    case 'write':
-      return decide(args[1], 'write');
+    case 'try':
+      return decide(args[1], 'try');
+    case 'done': {
+      const flag = args.indexOf('--target');
+      return done(sessionId, flag === -1 ? undefined : args[flag + 1]);
+    }
+    case 'clean':
+      return clean(args.includes('--list'));
     default:
       process.stdout.write(USAGE);
       process.exit(command === undefined || command === '--help' ? 0 : 1);

@@ -43,7 +43,23 @@ export interface PreExplanation {
   createdAt: number;
 }
 
-export const DecisionSchema = z.enum(['allow', 'write']);
+export const DecisionSchema = z.enum(['allow', 'try']);
+
+export const TryRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  target: z.string().min(1),
+  cwd: z.string().optional(),
+  termProgram: z.string().optional(),
+  claudeSsePort: z.string().optional(),
+  editor: z.string().optional(),
+});
+
+// Both optional: the learner running `let-me-explain done` has no way to know
+// their session id, so with one try in flight neither is needed.
+export const DoneRequestSchema = z.object({
+  sessionId: z.string().min(1).optional(),
+  target: z.string().min(1).optional(),
+});
 export type Decision = z.infer<typeof DecisionSchema>;
 
 export const DecisionRequestSchema = z.object({
@@ -118,4 +134,18 @@ export const LIMITS = {
   // decision from us rather than a timeout from the harness.
   decisionTimeoutMs: 5 * 60_000,
   daemonHealthTimeoutMs: 2_000,
+  // The waiting happens in the PreToolUse hook, not in an MCP call: the hook's
+  // budget is set by us in hooks.json, while an MCP request is capped at the
+  // SDK's 60s default. Kept just under the configured hook timeout so the
+  // daemon always answers first — a hook killed by the harness would let the
+  // agent's edit run and overwrite what the learner typed.
+  // Measured: a PreToolUse hook configured for 3600s ran a full 620s, past the
+  // 600s default, and its decision was still honoured. So the budget is ours to
+  // set. Each layer must be shorter than the one above so *we* answer rather
+  // than the harness killing the hook — a killed hook is a non-blocking error,
+  // and the tool would run and overwrite what the learner typed.
+  //   hooks.json 3600s  >  shim fetch 3570s  >  this 3540s
+  tryHookWaitMs: 3_540_000,
+  hookTimeoutSeconds: 3600,
+  tutorialMaxAgeMs: 7 * 24 * 60 * 60_000,
 } as const;

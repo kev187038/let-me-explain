@@ -2,7 +2,7 @@
 title: Enable / disable toggle
 feature: 7
 status: partial
-relates_to: [architecture, decisions, features/04-let-me-write, reference/cli]
+relates_to: [architecture, decisions, features/04-let-me-try, reference/cli]
 ---
 
 # Feature 7 — the off switch
@@ -57,7 +57,11 @@ Escalating, in the order you should reach for them:
 `let-me-explain off` is a `Bash` call, and `Bash` is intercepted. Without an exemption, turning
 the plugin off would require sitting through an explanation of the command that turns it off.
 
-`src/hook/policy.ts` exempts any Bash command containing `let-me-explain`, and our own MCP tools.
+`src/hook/policy.ts` exempts our own MCP tools, and any Bash command that invokes our CLI *as a
+command* followed by one of our subcommands. It is deliberately not a substring test: that
+version exempted every command merely mentioning a path containing `let-me-explain`, which
+silently disabled interception for anyone working in a directory of that name.
+
 This is a **correctness requirement, not a nicety** — it is the general trap of a control plane
 routed through the thing it controls, the same shape as a firewall rule that blocks the SSH
 session you would use to remove it.
@@ -104,5 +108,5 @@ place — `src/core/mode-file.ts`, hand-rolled and dependency-free so the shim c
 
 - [decisions.md](../decisions.md) — fail-open, and why `off` shares the failure path
 - [architecture.md](../architecture.md) — where the mode check sits in the request flow
-- [features/04-let-me-write.md](04-let-me-write.md) — what you are switching off
+- [features/04-let-me-try.md](04-let-me-try.md) — what you are switching off
 - [reference/cli.md](../reference/cli.md) — every command

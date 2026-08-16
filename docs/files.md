@@ -184,6 +184,47 @@ still looks authoritative. `PostToolUse` means the tool ran; `PermissionDenied` 
 
 **Why it is `async: true` in `hooks.json`:** it must never delay a tool call for a metric.
 
+### `src/core/tutorial.ts`
+Renders the markdown the learner types from.
+
+**Why it is built for ~50 columns:** it is read in an editor split beside the code, not on a full
+screen. Prose wraps at 60 and a test asserts no line is longer. The copyable code block is dropped
+above 15 lines because past that it costs a row per line and pushes the notes off screen — and the
+line-by-line section contains every line anyway.
+
+### `src/core/open-editor.ts`
+Decides *what* to launch; `try.ts` does the launching.
+
+**Why the split:** every platform's argv can be asserted in tests without a window ever opening.
+The tests assert *full argv*, not just the command name — an earlier version checked only the name
+and so shipped a macOS branch that handed the file to Terminal as an argument instead of opening
+an editor on it.
+**Why the tutorial is opened first:** the last file opened takes focus, and focus has to land where
+the learner types.
+
+### `src/core/cleanup.ts`
+Removes tutorial files by session, by age, or all.
+
+**Why three levels:** a try that finishes cleans itself, a session that ends cleans its own, and
+the age sweep catches sessions that were killed rather than closed.
+
+### `src/hook/session-end.ts`
+Asks the daemon to clean this session's tutorials.
+
+**Why it is so tight-lipped:** `SessionEnd` hooks share a small timeout budget, and nothing here
+is worth delaying a shutdown for.
+
+### `src/daemon/try.ts`
+Writes the tutorial, opens the surfaces, watches the file, hands back what the learner wrote.
+
+**Why the launcher is injected:** otherwise running the tests opens real editor windows.
+
+**Why it watches the directory rather than the file:** a file that does not exist yet cannot be
+watched, and many editors save by replacing the inode instead of writing in place.
+
+**Why the wait is 45 s:** the MCP SDK's `DEFAULT_REQUEST_TIMEOUT_MSEC` is 60 s. A call returns
+`waiting` before that expires and the agent calls again — expiry is a normal outcome, not an error.
+
 ### `src/core/stats.ts`
 Aggregates the JSONL event log into the numbers `let-me-explain stats` prints.
 
@@ -244,6 +285,27 @@ discipline.
 
 ---
 
+## The editor extension
+
+### `vscode-extension/src/extension.ts`
+A single status-bar button that appears while a try is waiting, and hands the learner's work back
+when clicked.
+
+**Why it exists at all:** VS Code's built-in markdown preview draws task-list checkboxes but does
+not make them clickable, and the preview is owned by VS Code — no plugin can change it. A real
+button needs an extension.
+
+**Why it polls rather than holds a connection:** the daemon may not be running, may restart, and
+gets a fresh port every time. A 2 s poll of a loopback endpoint costs nothing and needs no
+reconnection logic; an absent daemon just means the button stays hidden.
+
+**Why it duplicates the path and discovery rules** instead of importing them: it is a separate
+build for the VS Code runtime. The duplication is deliberate and is called out in its README —
+it has to stay in step with `src/core/paths.ts` and `src/core/discovery.ts`.
+
+**Why it is optional:** the tutorial checkbox and `let-me-explain done` cover every other editor,
+so nothing depends on it being installed.
+
 ## Tests
 
 | File | What it protects |
@@ -256,6 +318,9 @@ discipline.
 | `test/shim.test.ts` | **The positive control** — a real daemon and a real shim producing a *deny*. Every other shim test asserts `allow`, which a shim that did nothing would also pass |
 | `test/prebind.test.ts` | Explaining before the change: binding, one-change-per-explanation, the coverage-mismatch fallback, session and target scoping, and that the instruction text stays short |
 | `test/surface.test.ts` | The `prompt` surface returning `ask`, the prompt formatter and its truncation, and that the pre-surface mode-file format still parses |
+| `test/try.test.ts` | The try flow end to end, what the learner wrote coming back, and all three cleanup levels |
+| `test/tutorial.test.ts` | Tutorial rendering inside a narrow pane, and the launch argv for every platform |
+| `test/cli.test.ts` | The CLI as a subprocess against a real daemon. Added because `cli.ts` had no coverage at all, which is where `done` was silently broken |
 | `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
 
 ---

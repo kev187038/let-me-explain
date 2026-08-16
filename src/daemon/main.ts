@@ -10,6 +10,9 @@ import { createLogger } from './log.js';
 import { createModeStore } from './mode.js';
 import { createApp } from './routes.js';
 import { createTicketStore } from './tickets.js';
+import { createTryStore } from './try.js';
+import { cleanOlderThan } from '../core/cleanup.js';
+import { LIMITS } from '../contracts/index.js';
 import { createToolNames } from './tool-name.js';
 
 const env = envFromProcess();
@@ -53,8 +56,13 @@ async function main(): Promise<void> {
 
   const token = randomBytes(32).toString('hex');
   const store = createTicketStore();
+  const tries = createTryStore(env, fsIo);
+  // Backstop for sessions that were killed rather than closed.
+  await cleanOlderThan(env, LIMITS.tutorialMaxAgeMs).catch(() => {});
   const app = createApp({
     store,
+    tries,
+    env,
     mode: await createModeStore(fsIo, modePath(env)),
     log: createLogger(fsIo, env),
     toolNames: createToolNames(),
@@ -81,6 +89,7 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     store.close();
+    tries.close();
     server.close();
     await unlink(portFile).catch(() => {});
     await unlink(lockFilePath(env)).catch(() => {});

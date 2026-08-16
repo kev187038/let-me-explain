@@ -101,4 +101,68 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  'let_me_try',
+  {
+    title: 'Let the learner type this one',
+    description: [
+      'Call this when the learner says they want to write a change themselves.',
+      'It opens a tutorial next to the file in their editor and returns immediately.',
+      'Then retry the original tool call: it will pause until they have finished typing, and come back with what they wrote so you can compare it with what you intended.',
+      'Never write the file for them.',
+    ].join(' '),
+    inputSchema: {
+      target: z.string().describe('The file the learner is going to write, exactly as explained.'),
+    },
+  },
+  async ({ target }) => {
+    const address = await readDaemonAddress(env);
+    if (!address) {
+      return { content: [{ type: 'text' as const, text: 'let-me-explain is not running.' }] };
+    }
+
+    try {
+      const res = await fetch(daemonUrl(address, '/try'), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${address.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: SESSION_ID,
+          target,
+          cwd: process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
+          ...(process.env.TERM_PROGRAM ? { termProgram: process.env.TERM_PROGRAM } : {}),
+          ...(process.env.CLAUDE_CODE_SSE_PORT
+            ? { claudeSsePort: process.env.CLAUDE_CODE_SSE_PORT }
+            : {}),
+          ...(process.env.EDITOR ? { editor: process.env.EDITOR } : {}),
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const body = (await res.json()) as { ok?: boolean; error?: string };
+
+      if (!res.ok || !body.ok) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: body.error ?? 'could not open the tutorial' }],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `The tutorial and ${target} are open in the learner's editor. Now retry the original tool call — it will wait until they have finished and hand you what they wrote.`,
+          },
+        ],
+      };
+    } catch (e) {
+      return {
+        content: [{ type: 'text' as const, text: `let-me-explain unreachable (${String(e)}).` }],
+      };
+    }
+  },
+);
+
 await server.connect(new StdioServerTransport());

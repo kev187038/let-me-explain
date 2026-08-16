@@ -39,6 +39,36 @@ export function logDir(env: Env): string {
   return join(stateDir(env), 'log');
 }
 
+// Tutorials live outside the project on purpose: no repo pollution and no
+// .gitignore entry for anyone who installs this.
+export function tutorialRoot(env: Env): string {
+  return join(stateDir(env), 'tutorials');
+}
+
+export function tutorialDir(env: Env, sessionId: string): string {
+  return join(tutorialRoot(env), sanitizeId(sessionId));
+}
+
+export function tutorialPath(env: Env, sessionId: string, target: string): string {
+  const base = target.split(/[\\/]/).pop() ?? 'file';
+  // The basename alone collides: src/a/index.ts and src/b/index.ts would share
+  // one tutorial. The suffix keeps the tab label readable while staying unique.
+  return join(tutorialDir(env, sessionId), `TRY-${sanitizeName(base)}-${shortHash(target)}.md`);
+}
+
+// Not a crypto hash on purpose: this only has to discriminate filenames, and
+// paths.ts is imported by the dependency-free hook shim.
+function shortHash(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  return (hash >>> 0).toString(36).slice(0, 6);
+}
+
+function sanitizeName(name: string): string {
+  const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+  return safe.length > 0 ? safe : 'file';
+}
+
 export function logPath(env: Env, sessionId: string): string {
   return join(logDir(env), `${sanitizeId(sessionId)}.jsonl`);
 }

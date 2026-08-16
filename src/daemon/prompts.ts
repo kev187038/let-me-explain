@@ -71,9 +71,32 @@ export function explainMismatch(
   ].join('\n');
 }
 
-export const LEARNER_IS_WRITING = [
-  `[let-me-explain] The learner is writing this one by hand, to learn it.`,
+export const LEARNER_IS_TRYING = [
+  `[let-me-explain] The learner is typing this one themselves, to learn it.`,
   ``,
-  `Do not retry this edit and do not write the file yourself. Wait for them to tell you`,
-  `they are done, then read the file to see what they actually wrote and carry on from there.`,
+  `Call the let_me_try tool with this file as \`target\`. It opens a tutorial beside the file`,
+  `in their editor and returns when they are done, with what they wrote.`,
+  `Do not retry this edit and do not write the file yourself.`,
 ].join('\n');
+export function stillTyping(target: string): string {
+  return [
+    `[let-me-explain] The learner is still typing ${target}.`,
+    ``,
+    `Say nothing and retry this exact tool call to keep waiting. Do not write the file.`,
+  ].join('\n');
+}
+
+export function learnerFinished(target: string, yours: string, theirs: string): string {
+  return [
+    `[let-me-explain] The learner finished ${target}. Do not retry this edit.`,
+    ``,
+    `--- what they wrote ---`,
+    yours,
+    ``,
+    `--- what you intended ---`,
+    theirs,
+    ``,
+    `Compare them briefly and kindly: what matches, what differs, and whether theirs is simply`,
+    `a different valid choice rather than wrong. Do not rewrite the file for them.`,
+  ].join('\n');
+}

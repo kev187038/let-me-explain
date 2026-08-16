@@ -6,8 +6,12 @@ import {
   LIMITS,
   ModeRequestSchema,
   SurfaceRequestSchema,
+  TryRequestSchema,
+  DoneRequestSchema,
   type PreToolUseOutput,
 } from '../contracts/index.js';
+import { cleanAll, cleanSession, listTutorials } from '../core/cleanup.js';
+import type { Env } from '../core/paths.js';
 import { validateExplanation } from '../core/explanation.js';
 import { explainableLines } from '../core/lines.js';
 import { TOOL_VERSION } from '../version.js';
@@ -15,12 +19,15 @@ import type { Logger } from './log.js';
 import type { ModeStore } from './mode.js';
 import { renderInstructions } from './instructions.js';
 import {
-  LEARNER_IS_WRITING,
+  LEARNER_IS_TRYING,
   explainMismatch,
   explainRequest,
   explanationForPrompt,
+  learnerFinished,
+  stillTyping,
 } from './prompts.js';
 import type { TicketStore } from './tickets.js';
+import type { TryStore } from './try.js';
 import type { ToolNames } from './tool-name.js';
 
 export interface DaemonDeps {
@@ -28,8 +35,11 @@ export interface DaemonDeps {
   mode: ModeStore;
   log: Logger;
   toolNames: ToolNames;
+  tries: TryStore;
+  env: Env;
   token: string;
   decisionTimeoutMs?: number;
+  tryWaitMs?: number;
 }
 
 const allow = (): PreToolUseOutput => ({
@@ -55,8 +65,9 @@ const ask = (reason: string): PreToolUseOutput => ({
 });
 
 export function createApp(deps: DaemonDeps): Hono {
-  const { store, mode, log, toolNames, token } = deps;
+  const { store, mode, log, toolNames, tries, env, token } = deps;
   const decisionTimeoutMs = deps.decisionTimeoutMs ?? LIMITS.decisionTimeoutMs;
+  const tryWaitMs = deps.tryWaitMs ?? LIMITS.tryHookWaitMs;
   const app = new Hono();
 
   app.use('*', async (c, next) => {
@@ -77,15 +88,38 @@ export function createApp(deps: DaemonDeps): Hono {
     const event = parsed.data;
     toolNames.observe(event.toolName);
 
-    if (mode.get(event.sessionId) === 'off') return c.json(allow());
-
     const explainable = explainableLines(event.toolName, event.toolInput);
     if (!explainable || explainable.lines.length === 0) return c.json(allow());
+
+    // The learner is typing this one themselves. Park here rather than in the
+    // MCP call: this hook's budget is minutes, an MCP request's is 60s.
+    const typing = tries.waitFor(event.sessionId, explainable.target, tryWaitMs);
+    if (typing) {
+      const outcome = await typing;
+      await log.append({
+        type: `try.${outcome.status}`,
+        sessionId: event.sessionId,
+        target: explainable.target,
+      });
+      // Never `allow` here: letting the tool run would overwrite what they
+      // just wrote. Both branches deny.
+      return c.json(
+        deny(
+          outcome.status === 'done'
+            ? learnerFinished(explainable.target, outcome.yours, outcome.theirs)
+            : stillTyping(explainable.target),
+        ),
+      );
+    }
+
+    // Only *after* the try check: switching off stops future interception, it
+    // does not abandon work the learner is part-way through typing.
+    if (mode.get(event.sessionId) === 'off') return c.json(allow());
 
     const found = store.lookup(event);
     const { ticket } = found;
 
-    if (found.kind === 'declined') return c.json(deny(LEARNER_IS_WRITING));
+    if (found.kind === 'declined') return c.json(deny(LEARNER_IS_TRYING));
 
     if (found.kind === 'decided') {
       store.consume(ticket.id);
@@ -158,7 +192,7 @@ export function createApp(deps: DaemonDeps): Hono {
       outcome,
     });
 
-    if (outcome === 'write') return c.json(deny(LEARNER_IS_WRITING));
+    if (outcome === 'try') return c.json(deny(LEARNER_IS_TRYING));
     // A timeout must never leave the agent hanging: allow, and record that
     // nobody was watching.
     if (outcome === 'timeout') store.decide(ticket.id, 'allow');
@@ -255,6 +289,57 @@ export function createApp(deps: DaemonDeps): Hono {
     });
     return c.json({ ok: true });
   });
+
+  // The learner said they would write it. Lay out the tutorial, open their
+  // editor, and park until they are done.
+  app.post('/try', async (c) => {
+    const parsed = TryRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid try request' }, 400);
+
+    const { sessionId, target, cwd, ...sessionEnv } = parsed.data;
+
+    // Already open: say so rather than opening a second editor window.
+    if (tries.inFlight(sessionId, target)) {
+      return c.json({ ok: true, status: 'open' });
+    }
+
+    const view = store.pending().find((p) => p.sessionId === sessionId && p.target === target);
+    if (!view) {
+      return c.json(
+        {
+          ok: false,
+          error: `Nothing pending for "${target}". Propose the change first so it can be explained.`,
+        },
+        404,
+      );
+    }
+
+    await log.append({ type: 'try.begin', sessionId, target });
+    const opened = await tries.begin(view, sessionId, cwd ?? '', sessionEnv);
+    return c.json({ ok: true, status: 'open', ...opened });
+  });
+
+  app.post('/done', async (c) => {
+    const parsed = DoneRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid done request' }, 400);
+    const finished = await tries.finish(parsed.data.sessionId, parsed.data.target);
+    return c.json(finished);
+  });
+
+  app.post('/clean', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { sessionId?: unknown } | null;
+    const result =
+      typeof body?.sessionId === 'string'
+        ? await cleanSession(env, body.sessionId)
+        : await cleanAll(env);
+    return c.json({ ok: true, ...result });
+  });
+
+  app.get('/tutorials', async (c) => c.json({ tutorials: await listTutorials(env) }));
+
+  // Polled by the editor extension so it can show its "I'm done" button only
+  // while the learner is actually typing something.
+  app.get('/active', (c) => c.json({ tries: tries.list() }));
 
   app.get('/pending', (c) => c.json({ pending: store.pending() }));
 

@@ -1,0 +1,42 @@
+{
+  "name": "let-me-explain",
+  "displayName": "let-me-explain",
+  "description": "A status-bar button to hand your work back to Claude when you have finished typing.",
+  "version": "0.1.0",
+  "publisher": "gabi",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Education",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "letMeExplain.done",
+        "title": "let-me-explain: I'm done typing",
+        "category": "let-me-explain"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "package": "npm run build && npx --yes @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kev187038/let-me-explain.git"
+  },
+  "homepage": "https://github.com/kev187038/let-me-explain"
+}

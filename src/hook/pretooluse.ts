@@ -12,8 +12,9 @@ import { isOwnMachinery } from './policy.js';
 
 const HEALTH_TIMEOUT_MS = 2_000;
 const STDIN_TIMEOUT_MS = 5_000;
-// Under the harness's 600s hook budget, so the daemon's answer always wins.
-const DECISION_TIMEOUT_MS = 570_000;
+// Under the hook timeout set in hooks.json (3600s), so the daemon's answer
+// always wins. A let-me-try can hold this open for the best part of an hour.
+const DECISION_TIMEOUT_MS = 3_570_000;
 
 const ALLOW: PreToolUseOutput = {
   hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },

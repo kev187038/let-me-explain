@@ -2,7 +2,7 @@
 title: Per-line explanations
 feature: 1
 status: shipped
-relates_to: [architecture, features/00-single-agent, features/04-let-me-write, reference/protocol]
+relates_to: [architecture, features/00-single-agent, features/04-let-me-try, reference/protocol]
 ---
 
 # Feature 1 — every line, explained
@@ -100,6 +100,6 @@ what it was trying to do; a second model would be reverse-engineering intent fro
 ## Related
 
 - [features/00-single-agent.md](00-single-agent.md) — who writes the explanations, and how they arrive
-- [features/04-let-me-write.md](04-let-me-write.md) — what you do once you have read one
+- [features/04-let-me-try.md](04-let-me-try.md) — what you do once you have read one
 - [reference/protocol.md](../reference/protocol.md) — the `/explain` route
 - [files.md](../files.md) — why validation lives at the boundary
