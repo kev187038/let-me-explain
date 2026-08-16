@@ -56,7 +56,12 @@ async function main(): Promise<void> {
 
   const token = randomBytes(32).toString('hex');
   const store = createTicketStore();
-  const tries = createTryStore(env, fsIo);
+  // End-to-end runs drive the real daemon; without this they would open a real
+  // editor window per try.
+  const tries =
+    process.env.LET_ME_EXPLAIN_NO_LAUNCH === '1'
+      ? createTryStore(env, fsIo, () => {})
+      : createTryStore(env, fsIo);
   // Backstop for sessions that were killed rather than closed.
   await cleanOlderThan(env, LIMITS.tutorialMaxAgeMs).catch(() => {});
   const app = createApp({

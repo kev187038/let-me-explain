@@ -1,69 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import * as vscode from 'vscode';
+import { type Attempt, activeTry, buttonLabel, finishTry } from './daemon.js';
 
-// The daemon's discovery and path rules are duplicated here rather than
-// imported: this is a separate build targeting the VS Code runtime, and the
-// twenty lines below are cheaper than wiring a shared package into it. They
-// must stay in step with src/core/paths.ts and src/core/discovery.ts.
+// UI wiring only. Everything that talks to the daemon lives in daemon.ts so the
+// end-to-end test can run the button's real logic without a VS Code host.
 
 const POLL_MS = 2_000;
-
-interface Address {
-  port: number;
-  token: string;
-}
-
-interface Attempt {
-  sessionId: string;
-  target: string;
-}
-
-function stateDir(): string {
-  const xdg = process.env.XDG_STATE_HOME;
-  if (xdg) return join(xdg, 'let-me-explain');
-  if (process.env.APPDATA) return join(process.env.APPDATA, 'let-me-explain', 'state');
-  return join(process.env.HOME ?? homedir(), '.local', 'state', 'let-me-explain');
-}
-
-function portFile(): string {
-  const runtime = process.env.XDG_RUNTIME_DIR;
-  return runtime
-    ? join(runtime, 'let-me-explain', 'daemon.json')
-    : join(stateDir(), 'run', 'daemon.json');
-}
-
-async function address(): Promise<Address | null> {
-  try {
-    const data = JSON.parse(await readFile(portFile(), 'utf8')) as Partial<Address>;
-    return typeof data.port === 'number' && typeof data.token === 'string'
-      ? { port: data.port, token: data.token }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function call(path: string, init: RequestInit = {}): Promise<unknown | null> {
-  const at = await address();
-  if (!at) return null;
-  try {
-    const res = await fetch(`http://127.0.0.1:${at.port}${path}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${at.token}`,
-        'content-type': 'application/json',
-        ...init.headers,
-      },
-      signal: AbortSignal.timeout(3_000),
-    });
-    return res.ok ? await res.json() : null;
-  } catch {
-    // The daemon not running is the normal state, not an error worth showing.
-    return null;
-  }
-}
 
 export function activate(context: vscode.ExtensionContext): void {
   const button = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -78,12 +19,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage('let-me-explain: nothing is waiting on you.');
       return;
     }
-    const body = (await call('/done', {
-      method: 'POST',
-      body: JSON.stringify({ sessionId: current.sessionId, target: current.target }),
-    })) as { ok?: boolean } | null;
-
-    if (body?.ok) {
+    if (await finishTry(current)) {
       button.hide();
       current = null;
       void vscode.window.setStatusBarMessage('let-me-explain: handed back to Claude', 4_000);
@@ -93,20 +29,16 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Polling rather than a socket: the daemon may not be running, may restart,
-  // and may be on a different port each time. A 2s poll of a loopback endpoint
-  // costs nothing and needs no reconnection logic.
+  // and gets a fresh port each time. A 2s poll of a loopback endpoint costs
+  // nothing and needs no reconnection logic.
   const timer = setInterval(() => {
     void (async () => {
-      const body = (await call('/active')) as { tries?: Attempt[] } | null;
-      const attempt = body?.tries?.[0] ?? null;
-      current = attempt;
-
-      if (!attempt) {
+      current = await activeTry();
+      if (!current) {
         button.hide();
         return;
       }
-      const name = attempt.target.split(/[\\/]/).pop() ?? attempt.target;
-      button.text = `$(check) I'm done — ${name}`;
+      button.text = buttonLabel(current);
       button.show();
     })();
   }, POLL_MS);

@@ -209,6 +209,18 @@ scripting, and the groundwork for a future editor panel.
 
 Full reference: [docs/reference/cli.md](docs/reference/cli.md).
 
+## Tests
+
+```bash
+npm test           # seconds, deterministic — includes a full end-to-end journey
+npm run test:e2e   # minutes, a real Claude session — opt-in, skips without credentials
+```
+
+The fast suite walks the whole learner journey with everything real except the model. The opt-in
+one repeats it against a real session and reports deny-rate, which is the only signal that the
+injected instructions have stopped landing. See
+[docs/development.md](docs/development.md#the-two-test-suites).
+
 ## Environment variables
 
 None are required. All are read once at the process edge in `src/io/env.ts`.

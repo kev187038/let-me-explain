@@ -85,6 +85,33 @@ node dist/cli.js allow t_…
 Because every path is env-driven (`src/core/paths.ts`), pointing `XDG_*` at a temp directory
 gives you a completely isolated instance that cannot disturb your real one.
 
+## The two test suites
+
+```bash
+npm test           # seconds, deterministic, gates everything
+npm run test:e2e   # minutes, a real model, opt-in
+```
+
+`npm test` includes `test/e2e.test.ts`, which walks the whole learner journey with **every piece
+real except the model**: the actual hook shim binary, the actual daemon, the actual MCP server
+driven through a real MCP client, the actual CLI, and the actual code behind the VS Code button.
+The test makes the tool calls a real agent would, in the order it makes them.
+
+`npm run test:e2e` runs the same journey against a real `claude -p` session, with its own config
+(`vitest.e2e.config.ts`) so it never joins the fast suite. It needs credentials and a network and
+is nondeterministic — a suite that flakes is a suite people stop reading — so it **skips itself
+with a message** rather than failing when the CLI or a login is missing.
+
+It exists for the one number no unit test can produce: **deny-rate**. A rise means the injected
+instructions have stopped landing, and nothing else would tell you.
+
+Two things the live run needs, both handled in its setup:
+
+- `LET_ME_EXPLAIN_NO_LAUNCH=1`, or every try opens a real editor window.
+- `surface: window`, because a headless session can auto-*approve*
+  (`--permission-mode acceptEdits`) but there is no auto-*reject* — so "I'll write it myself" can
+  only be scripted through our own CLI.
+
 ## Testing
 
 No mocks anywhere. Two seams make that possible:

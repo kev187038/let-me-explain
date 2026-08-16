@@ -205,12 +205,17 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
       return attempts.size;
     },
 
-    list(): { sessionId: string; target: string; tutorial: string }[] {
+    // `target` is the key's target — the name the agent used — because that is
+    // what finish() matches on. `path` is the resolved file, for display only.
+    // Reporting the resolved path as `target` made the button post something
+    // the daemon could not find.
+    list(): { sessionId: string; target: string; path: string; tutorial: string }[] {
       return [...attempts.entries()].map(([id, attempt]) => {
         const split = id.indexOf(':');
         return {
           sessionId: id.slice(0, split),
-          target: attempt.target,
+          target: id.slice(split + 1),
+          path: attempt.target,
           tutorial: attempt.tutorial,
         };
       });

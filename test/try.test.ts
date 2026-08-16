@@ -238,6 +238,49 @@ describe('let-me-try', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(300);
   });
 
+  // On the window surface the learner answers through the CLI, and `try`
+  // resolves the ticket. /try used to look tickets up via pending(), which
+  // filters resolved ones out — so let-me-try 404'd on that surface entirely.
+  it('opens after a `try` decision on the window surface', async () => {
+    const mode = await createModeStore(fsIo, modePath(env));
+    await mode.setSurface('window');
+    const windowApp = createApp({
+      store,
+      tries,
+      env,
+      mode,
+      log: createLogger(fsIo, env),
+      toolNames: createToolNames(),
+      token: TOKEN,
+      decisionTimeoutMs: 150,
+      tryWaitMs: 400,
+    });
+    const send = (path: string, body: unknown) =>
+      windowApp.request(path, { method: 'POST', headers: AUTH, body: JSON.stringify(body) });
+
+    await send('/explain', {
+      sessionId: SESSION,
+      target: 'src/win.ts',
+      lines: [{ n: 1, note: 'sets a' }],
+      why: 'because',
+    });
+    const parked = send('/hook', {
+      sessionId: SESSION,
+      cwd: repo,
+      toolName: 'Write',
+      toolInput: { file_path: 'src/win.ts', content: 'const a = 1' },
+    });
+    await tick(30);
+
+    const ticket = store.pending().find((p) => p.target === 'src/win.ts')?.ticket;
+    await send('/decision', { ticket, decision: 'try' });
+    await parked;
+
+    const res = await send('/try', { sessionId: SESSION, target: 'src/win.ts', cwd: repo });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe('open');
+  });
+
   it('says so when nothing was waiting', async () => {
     const res = await post('/done', { sessionId: 'nobody' });
     expect(((await res.json()) as { ok: boolean }).ok).toBe(false);

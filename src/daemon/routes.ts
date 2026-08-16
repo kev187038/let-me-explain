@@ -303,7 +303,7 @@ export function createApp(deps: DaemonDeps): Hono {
       return c.json({ ok: true, status: 'open' });
     }
 
-    const view = store.pending().find((p) => p.sessionId === sessionId && p.target === target);
+    const view = store.viewFor(sessionId, target);
     if (!view) {
       return c.json(
         {

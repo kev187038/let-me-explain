@@ -168,7 +168,7 @@ Plus `let-me-explain clean`, and `let-me-explain clean --list` to see what is th
 | The tool the agent calls | `src/mcp/server.ts` |
 | Cleanup | `src/core/cleanup.ts`, `src/hook/session-end.ts` |
 | The VS Code button | `vscode-extension/src/extension.ts` |
-| Tests | `test/try.test.ts`, `test/tutorial.test.ts` |
+| Tests | `test/try.test.ts`, `test/tutorial.test.ts`, `test/e2e.test.ts` |
 
 ## Related
 

@@ -72,6 +72,23 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
     byKey.delete(key(t.sessionId, t.hash));
   }
 
+  function toView(t: Ticket): PendingView {
+    const ex = explainableLines(t.toolName, t.toolInput);
+    const notes = new Map(t.explanation?.lines.map((l) => [l.n, l.note]) ?? []);
+    return {
+      ticket: t.id,
+      sessionId: t.sessionId,
+      toolName: t.toolName,
+      state: t.state,
+      target: ex?.target ?? '',
+      lines: (ex?.lines ?? []).map((code, i) => {
+        const note = notes.get(i + 1);
+        return note === undefined ? { n: i + 1, code } : { n: i + 1, code, note };
+      }),
+      ...(t.explanation ? { why: t.explanation.why } : {}),
+    };
+  }
+
   function settle(id: string, outcome: Decision | 'timeout'): void {
     const timer = timers.get(id);
     if (timer) clearTimeout(timer);
@@ -196,26 +213,21 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
       if (t) drop(t);
     },
 
-    pending(): PendingView[] {
+    // /try needs the ticket for a change the learner has taken over, and on the
+    // window surface that ticket is already `resolved` with decision 'try' — so
+    // pending(), which drops resolved tickets, cannot find it.
+    viewFor(sessionId: string, target: string): PendingView | undefined {
       sweep();
       return [...byId.values()]
-        .filter((t) => t.state !== 'resolved')
-        .map((t) => {
-          const ex = explainableLines(t.toolName, t.toolInput);
-          const notes = new Map(t.explanation?.lines.map((l) => [l.n, l.note]) ?? []);
-          return {
-            ticket: t.id,
-            sessionId: t.sessionId,
-            toolName: t.toolName,
-            state: t.state,
-            target: ex?.target ?? '',
-            lines: (ex?.lines ?? []).map((code, i) => {
-              const note = notes.get(i + 1);
-              return note === undefined ? { n: i + 1, code } : { n: i + 1, code, note };
-            }),
-            ...(t.explanation ? { why: t.explanation.why } : {}),
-          };
-        });
+        .filter((t) => t.sessionId === sessionId)
+        .filter((t) => t.state !== 'resolved' || t.decision === 'try')
+        .map(toView)
+        .find((v) => v.target === target);
+    },
+
+    pending(): PendingView[] {
+      sweep();
+      return [...byId.values()].filter((t) => t.state !== 'resolved').map(toView);
     },
 
     close(): void {

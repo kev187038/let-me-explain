@@ -287,9 +287,19 @@ discipline.
 
 ## The editor extension
 
+### `vscode-extension/src/daemon.ts`
+Everything the button *does*: find the daemon, poll `/active`, POST `/done`.
+
+**Why it is split out of `extension.ts`:** with the logic inside `activate()` nothing could reach
+it, so the button was untestable. With no `vscode` import, the end-to-end test presses the button
+by running its real code rather than a copy — which is how the target-identity bug was caught.
+
+**What is still untested:** the VS Code wiring itself — that the status bar item appears and the
+command is registered. That needs `@vscode/test-electron`, a ~200 MB download and a display.
+
 ### `vscode-extension/src/extension.ts`
-A single status-bar button that appears while a try is waiting, and hands the learner's work back
-when clicked.
+The VS Code wiring: a status-bar button that appears while a try is waiting, and the command it
+runs. All daemon traffic lives in `daemon.ts`.
 
 **Why it exists at all:** VS Code's built-in markdown preview draws task-list checkboxes but does
 not make them clickable, and the preview is owned by VS Code — no plugin can change it. A real
@@ -320,6 +330,8 @@ so nothing depends on it being installed.
 | `test/surface.test.ts` | The `prompt` surface returning `ask`, the prompt formatter and its truncation, and that the pre-surface mode-file format still parses |
 | `test/try.test.ts` | The try flow end to end, what the learner wrote coming back, and all three cleanup levels |
 | `test/tutorial.test.ts` | Tutorial rendering inside a narrow pane, and the launch argv for every platform |
+| `test/e2e.test.ts` | The whole journey with everything real but the model — shim, daemon, MCP server over a real MCP client, CLI, and the button's own module. It found the button posting an identity `/done` could not match |
+| `test/live/journey.live.test.ts` | The same journey against a real `claude -p` session. Opt-in via `npm run test:e2e`; reports deny-rate |
 | `test/cli.test.ts` | The CLI as a subprocess against a real daemon. Added because `cli.ts` had no coverage at all, which is where `done` was silently broken |
 | `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
 
