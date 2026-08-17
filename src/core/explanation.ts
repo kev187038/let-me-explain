@@ -57,11 +57,19 @@ export function unexplained(explainable: Explainable, notes: LineNote[]): number
   return requiredLineNumbers(explainable).filter((n) => !covered.has(n));
 }
 
-// Returned verbatim to the agent as a tool error, so anything that fails here
-// has to be worth a round trip. Coverage is not: a missing note is shown to the
-// learner as a gap instead, which never blocks the change.
-export function validateExplanation(
-  explainable: Explainable,
+/**
+ * Everything checkable without the code in hand.
+ *
+ * Split out because the agent usually explains *before* making its tool call,
+ * and on that path there is no change to compare against — which meant nothing
+ * was checked at all, not even "did you send any notes". Coverage is the only
+ * thing that genuinely needs the code, and coverage is no longer a gate.
+ *
+ * Returned verbatim to the agent as a tool error, so anything that fails here
+ * has to be worth a round trip.
+ */
+export function validateNotes(
+  target: string,
   input: Pick<ExplainInput, 'lines' | 'why'>,
 ): Validation {
   if (input.lines.length === 0) {
@@ -73,11 +81,9 @@ export function validateExplanation(
 
   // A command packs far more meaning per line than a line of code, and naming
   // four flags does not fit in the tighter budget.
-  const maxWords =
-    explainable.target === 'shell' ? LIMITS.maxShellNoteWords : LIMITS.maxNoteWords;
+  const maxWords = target === 'shell' ? LIMITS.maxShellNoteWords : LIMITS.maxNoteWords;
 
-  const aligned = alignNotes(explainable, input.lines);
-  const tooLong = aligned.filter((l) => words(l.note) > maxWords);
+  const tooLong = input.lines.filter((l) => words(l.note) > maxWords);
   if (tooLong.length > 0) {
     return {
       ok: false,
@@ -93,4 +99,18 @@ export function validateExplanation(
   }
 
   return { ok: true };
+}
+
+// Coverage is not checked: a missing note is shown to the learner as a gap
+// instead, which never blocks the change.
+export function validateExplanation(
+  explainable: Explainable,
+  input: Pick<ExplainInput, 'lines' | 'why'>,
+): Validation {
+  const aligned = alignNotes(explainable, input.lines);
+  // Report against the lines the learner will actually see them on.
+  return validateNotes(explainable.target, {
+    lines: aligned.length > 0 ? aligned : input.lines,
+    why: input.why,
+  });
 }

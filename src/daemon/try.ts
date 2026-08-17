@@ -16,8 +16,10 @@ const SETTLE_MS = 50;
 export interface TryOutcome {
   status: 'done' | 'waiting';
   target: string;
-  yours: string;
-  theirs: string;
+  /** What is on disk — the learner's own work. */
+  learnerWrote: string;
+  /** The code the agent proposed, captured before the learner touched it. */
+  agentIntended: string;
   tutorial: string;
 }
 
@@ -55,11 +57,23 @@ export const spawnLauncher: Launcher = (env, paths) => {
   }
 };
 
-export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLauncher) {
+/**
+ * `onFinished` retires the ticket a try was answering. Without it the ticket
+ * outlives the try — `viewFor` deliberately keeps try-resolved tickets visible
+ * so a tutorial can be reopened, and nothing ever told it the try was over.
+ */
+export function createTryStore(
+  env: Env,
+  io: FsIo,
+  launch: Launcher = spawnLauncher,
+  onFinished: (ticket: string) => void = () => {},
+) {
   interface Attempt {
     target: string;
+    /** The ticket this try answers, retired when the try ends. */
+    ticket?: string;
     tutorial: string;
-    theirs: string;
+    agentIntended: string;
     waiters: ((o: TryOutcome) => void)[];
     watcher?: FSWatcher;
     quiet?: NodeJS.Timeout;
@@ -72,7 +86,7 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
   const armed = new Map<string, { at: number; cwd: string; sessionEnv: SessionEnv }>();
   // Tries the learner has finished. Kept so a repeat of the same tool call is
   // refused outright instead of asking them to approve overwriting their work.
-  const finished = new Map<string, { at: number; theirs: string }>();
+  const finished = new Map<string, { at: number; agentIntended: string }>();
   const key = (sessionId: string, target: string) => `${sessionId}:${target}`;
 
   // Rewrites the tutorial in place so an open editor buffer updates rather
@@ -98,12 +112,12 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
     attempt.deadline = undefined;
     attempt.watcher?.close();
 
-    const yours = await readFile(attempt.target, 'utf8').catch(() => '');
+    const learnerWrote = await readFile(attempt.target, 'utf8').catch(() => '');
     const outcome: TryOutcome = {
       status,
       target: attempt.target,
-      yours,
-      theirs: attempt.theirs,
+      learnerWrote,
+      agentIntended: attempt.agentIntended,
       tutorial: attempt.tutorial,
     };
 
@@ -112,7 +126,8 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
 
     if (status === 'done') {
       attempts.delete(id);
-      finished.set(id, { at: Date.now(), theirs: attempt.theirs });
+      if (attempt.ticket) onFinished(attempt.ticket);
+      finished.set(id, { at: Date.now(), agentIntended: attempt.agentIntended });
       // The tutorial is kept, not deleted. Removing it pulled the document out
       // from under the learner while it was still open in their editor, taking
       // the explanation with it exactly when they were reading the feedback.
@@ -147,12 +162,17 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
     },
 
     /**
-     * True when the learner has already typed this exact change themselves.
+     * True when this tool call is the agent re-attempting a change the learner
+     * has already taken over — the *same code it proposed last time*, arriving
+     * again after they typed their own version.
      *
-     * Without it the agent's next identical tool call finds a ticket still
-     * sitting in `awaiting_decision` and the learner is asked to approve
-     * overwriting the file they just wrote. Matching on the *content* rather
-     * than the file keeps a genuinely different later edit unaffected.
+     * It compares against what the agent intended, not what the learner wrote,
+     * and that is deliberate: the learner's version is usually different (that
+     * is the point), so comparing to it would let the repeat through and the
+     * learner would be asked to approve overwriting their own work.
+     *
+     * Callers must skip this when a new round is already under way — see
+     * `isArmed` — or a legitimate follow-up gets mistaken for a repeat.
      */
     alreadyWritten(sessionId: string, target: string, code: string, ttlMs: number): boolean {
       const done = finished.get(key(sessionId, target));
@@ -161,12 +181,17 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
         finished.delete(key(sessionId, target));
         return false;
       }
-      return done.theirs.trim() === code.trim();
+      return done.agentIntended.trim() === code.trim();
     },
 
     // The learner said "let me try" from the menu, before the tool call.
     arm(sessionId: string, target: string, cwd: string, sessionEnv: SessionEnv): void {
       armed.set(key(sessionId, target), { at: Date.now(), cwd, sessionEnv });
+    },
+
+    /** Whether the learner has asked to type this one, without consuming it. */
+    isArmed(sessionId: string, target: string): boolean {
+      return armed.has(key(sessionId, target));
     },
 
     /** The armed intent, if one is still fresh. Reading it clears it. */
@@ -198,7 +223,7 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
 
       const targetPath = resolve(cwd, view.target);
       const tutorial = tutorialPath(env, sessionId, view.target);
-      const theirs = view.lines.map((l) => l.code).join('\n');
+      const agentIntended = view.lines.map((l) => l.code).join('\n');
 
       await mkdir(tutorialDir(env, sessionId), { recursive: true });
       await io.writeFileAtomic(
@@ -210,7 +235,13 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
       await mkdir(dirname(targetPath), { recursive: true }).catch(() => {});
       if (!(await io.fileExists(targetPath))) await io.writeFileAtomic(targetPath, '');
 
-      const attempt: Attempt = { target: targetPath, tutorial, theirs, waiters: [] };
+      const attempt: Attempt = {
+        target: targetPath,
+        tutorial,
+        agentIntended,
+        waiters: [],
+        ...(view.ticket ? { ticket: view.ticket } : {}),
+      };
       attempts.set(id, attempt);
 
       launch(

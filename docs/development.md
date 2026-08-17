@@ -10,8 +10,8 @@ relates_to: [architecture, files, decisions, reference/hook-contract]
 
 ```bash
 npm install
-npm run build      # four entries: cli, daemon, hook shim, mcp server
-npm test           # 54 tests
+npm run build      # six entries: cli, daemon, mcp server, and three hook shims
+npm test           # 212 tests, seconds
 npm run typecheck
 ```
 
@@ -96,6 +96,16 @@ npm run test:e2e   # minutes, a real model, opt-in
 real except the model**: the actual hook shim binary, the actual daemon, the actual MCP server
 driven through a real MCP client, the actual CLI, and the actual code behind the VS Code button.
 The test makes the tool calls a real agent would, in the order it makes them.
+
+It also includes `test/paths.test.ts`, which is the one to extend when you change the flow. Every
+bug that has reached real use here has been a **sequence** bug rather than a logic bug — a second
+round replaying the first, a finished try leaving its ticket alive, a fix mistaken for a repeat —
+and each one was made of individually correct functions. Unit suites cover components; that file
+covers orderings: single rounds, two rounds on one file, repeat protection, every finish signal,
+concurrency, and degenerate input. Writing it out found a gap nobody had reported.
+
+**If you add a second entry point to an existing operation, add its row to that matrix.** The
+recurring failure is a guarantee attached to one code path while the traffic moves to another.
 
 `npm run test:e2e` runs the same journey against a real `claude -p` session, with its own config
 (`vitest.e2e.config.ts`) so it never joins the fast suite. It needs credentials and a network and

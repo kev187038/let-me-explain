@@ -245,11 +245,21 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
     // /try needs the ticket for a change the learner has taken over, and on the
     // window surface that ticket is already `resolved` with decision 'try' — so
     // pending(), which drops resolved tickets, cannot find it.
+    //
+    // Newest first. A Map iterates in insertion order, so a bare .find() here
+    // returned the *oldest* match — which meant a second change to the same
+    // file in one session was answered with the first change's code, every
+    // time. Deterministically wrong is still wrong.
     viewFor(sessionId: string, target: string): PendingView | undefined {
       sweep();
+      // `.reverse()` before the sort, not decoration: two tickets minted in the
+      // same millisecond tie on createdAt, and a stable sort would then fall
+      // back to insertion order — handing back the oldest again.
       return [...byId.values()]
+        .reverse()
         .filter((t) => t.sessionId === sessionId)
         .filter((t) => t.state !== 'resolved' || t.decision === 'try')
+        .sort((a, b) => b.createdAt - a.createdAt)
         .map(toView)
         .find((v) => v.target === target);
     },

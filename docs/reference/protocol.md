@@ -88,9 +88,10 @@ Called by the MCP server on the agent's behalf, in one of two forms.
 }
 ```
 
-Returns `200 {"ok":true,"pending":true,"next":"…"}`. Nothing is validated yet — the notes describe
-content the daemon has not seen. It is shelved under `(sessionId, target)` with a ~2 minute TTL,
-and checked when the matching tool call arrives.
+Returns `200 {"ok":true,"pending":true,"next":"…"}`, or `400` if the notes fail the checks that
+need no code in hand — none sent, or over the word cap. Coverage is not judged here (the daemon has
+not seen the content yet) and is not a gate anywhere. The explanation is shelved under
+`(sessionId, target)` with a ~2 minute TTL and bound when the matching tool call arrives.
 
 `next` is the reply the MCP server hands straight back to the agent. It asks the agent to put a
 menu to the learner via `AskUserQuestion` — **Yes, go ahead** / **Let me try** / **Explain more

@@ -296,6 +296,62 @@ seen in a real interactive session — the same reason deny-rate is tracked.
 
 ---
 
+## The newest intent wins, everywhere
+
+Three separate bugs in one day turned out to be the same mistake, so the rule is written down
+rather than rediscovered a fourth time: **when two pieces of state could describe "the change in
+front of us", the most recently created one is the answer.**
+
+- `POST /try` looked for a *ticket* before a pre-explanation. A pre-explanation means the agent has
+  explained something it has not yet attempted, which is by definition newer — so a second "let me
+  try" on the same file replayed the first round's code and notes.
+- `viewFor` used `.find()` over a `Map`, which iterates in insertion order and therefore returned
+  the *oldest* matching ticket. It now takes the newest, with `.reverse()` before the sort because
+  two tickets minted in the same millisecond tie on `createdAt` and a stable sort would fall back
+  to insertion order.
+- The repeat gate fired on a genuine follow-up. It now stands aside whenever a try is armed or a
+  fresh pre-explanation exists, because both mean a new round is under way.
+
+**A finished try also retires its ticket.** `viewFor` deliberately keeps try-resolved tickets
+visible so a tutorial can be reopened, and nothing told it when the try ended — so `createTryStore`
+takes an `onFinished` callback wired to `store.consume`. Where one object's completion implies
+another's, make the link explicit; two independent TTLs will not stay in agreement.
+
+---
+
+## The repeat gate compares the agent's code, not the learner's
+
+**Rejected:** comparing the incoming tool call against what the learner typed.
+
+**Why:** it reads more naturally — the function is called `alreadyWritten` — and it is wrong. The
+learner's version is *usually different from the agent's*; that is the entire point of the feature.
+Comparing against it would let the agent's identical retry sail through, and the learner would be
+asked to approve overwriting their own work: exactly the bug the gate was added to prevent.
+
+The gate answers "is this the agent re-attempting the change it already proposed?", so it compares
+against `agentIntended`. Legitimate follow-ups are separated by the newness rule above, not by the
+operand. This was reported as a bug with a proposed fix; the diagnosis was right and the fix would
+have regressed. A correct root cause does not imply a correct patch.
+
+---
+
+## Notes are validated on both paths, not just the one that had the code
+
+**Rejected:** validating only where an explanation is bound to a real change.
+
+**Why:** the checks were written when a ticket was the only way to explain something, and then the
+traffic moved. Once the agent explains *before* acting — now almost every explanation — the
+pre-explanation branch accepted anything at all: zero notes, thousand-word walls. No error, no
+failing test, just an invariant that quietly stopped holding. `validateNotes` is the part that
+needs no code in hand (something was sent, it is short enough) and now runs on both paths;
+`validateExplanation` adds only the line alignment used to number the error message.
+
+The general shape, seen three times today: **a guarantee attached to one code path, and then a
+second route added to the same operation.** Worth asking every time — which invariants did the old
+path enforce, and does the new one enforce them too?
+
+---
+
 ## A watcher has to prove it can show the choice
 
 **Rejected:** treating any authenticated `GET /active` poll as evidence that someone can decide.

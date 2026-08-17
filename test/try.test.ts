@@ -165,6 +165,72 @@ describe('let-me-try', () => {
     });
   });
 
+  // Reported from real use: a second "let me try" on the same file in one
+  // session replayed the first change. `/try` looked for a ticket before a
+  // pre-explanation, and the previous round's ticket was still visible — so the
+  // tutorial, and the "what you intended" the agent was shown, were both stale.
+  // The path where the learner gets it wrong and the agent talks them through a
+  // fix. Round 2's intent is byte-identical to round 1's — it is the same
+  // correct file — so a gate keyed on the agent's code alone mistook the fix
+  // for a repeat and refused to open the tutorial at all.
+  it('lets the learner try again after getting it wrong', async () => {
+    const intent = 'const a = 1';
+    const explain = (why: string) =>
+      post('/explain', { sessionId: SESSION, target: 'src/a.ts', lines: [{ n: 1, note: 'sets a' }], why });
+
+    await explain('round one');
+    await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    const one = retry('src/a.ts', intent);
+    await tick(40);
+    await writeFile(join(repo, 'src/a.ts'), 'const a = // broken\n');
+    await post('/done', { sessionId: SESSION });
+    await one;
+
+    // They ask to try again; the agent proposes the same correct code.
+    await explain('round two');
+    await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    const two = retry('src/a.ts', intent);
+    await tick(40);
+    await writeFile(join(repo, 'src/a.ts'), 'const a = 1\n');
+    await post('/done', { sessionId: SESSION });
+
+    const out = await reasonOf(await two);
+    // The comparison, not a refusal to open.
+    expect(out.permissionDecisionReason).toContain('finished');
+    expect(out.permissionDecisionReason).not.toContain('already typed');
+    expect(out.permissionDecisionReason).toContain('const a = 1');
+  });
+
+  it('does not replay the previous change on a second try', async () => {
+    const notes = (label: string) => [{ n: 1, note: `${label} line one` }];
+
+    await post('/explain', { sessionId: SESSION, target: 'src/a.ts', lines: notes('first'), why: 'round one' });
+    await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    const one = retry('src/a.ts', 'const a = 1');
+    await tick(40);
+    await post('/done', { sessionId: SESSION });
+    await one;
+
+    // A genuinely different second change to the same file.
+    await post('/explain', { sessionId: SESSION, target: 'src/a.ts', lines: notes('second'), why: 'round two' });
+    const armed = await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    expect(((await armed.json()) as { status: string }).status).toBe('armed');
+
+    const two = retry('src/a.ts', 'const b = 2');
+    await tick(40);
+
+    const tutorial = await readFile(tutorialPath(env, SESSION, 'src/a.ts'), 'utf8');
+    expect(tutorial).toContain('const b = 2');
+    expect(tutorial).toContain('second line one');
+    expect(tutorial).not.toContain('const a = 1');
+
+    await post('/done', { sessionId: SESSION });
+    const out = await reasonOf(await two);
+    // "what you intended" must be this round's code, not the last one's.
+    expect(out.permissionDecisionReason).toContain('const b = 2');
+    expect(out.permissionDecisionReason).not.toContain('const a = 1');
+  });
+
   it('opens the tutorial and the file, and returns at once', async () => {
     await pendingChange('src/auth.ts', 'const ttl = 900\nreturn ttl', [
       'how long the token stays valid',

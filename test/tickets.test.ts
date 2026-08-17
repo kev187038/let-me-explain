@@ -144,4 +144,21 @@ describe('ticket store', () => {
       },
     ]);
   });
+
+  // A Map iterates in insertion order, so a bare .find() returned the oldest
+  // match — which is how a second change to a file got answered with the first
+  // change's code, deterministically, every time.
+  it('returns the newest ticket for a file, not the first one made', () => {
+    const store = createTicketStore();
+    const event = (content: string) => ({
+      sessionId: 's1',
+      cwd: '/repo',
+      toolName: 'Write',
+      toolInput: { file_path: '/a.ts', content },
+    });
+    store.lookup(event('const a = 1'));
+    store.lookup(event('const b = 2'));
+
+    expect(store.viewFor('s1', '/a.ts')?.lines[0]?.code).toBe('const b = 2');
+  });
 });

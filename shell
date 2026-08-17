@@ -1,0 +1,1 @@
+find /home/gabi/Desktop/stuff/let-me-explain -maxdepth 2 -not -path '*/node_modules*' -not -path '*/.git/*' | sort

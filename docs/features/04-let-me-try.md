@@ -73,8 +73,29 @@ and **✎ Let me try** — with the explanation in the tooltip. From a terminal 
    — and took the explanation with it exactly when you were reading the feedback. It ages out
    with the rest, or goes on `let-me-explain clean`.
 9. The same tool call is refused from then on. The ticket used to outlive the try, so the agent's
-   next identical call asked you to approve overwriting the file you had just typed. A *different*
-   change to the same file is unaffected — the match is on content, not filename.
+   next identical call asked you to approve overwriting the file you had just typed.
+
+## Getting it wrong, then trying again
+
+This is the loop the feature exists for, and it is the one that broke hardest in real use:
+
+1. You type something that does not work. The agent gets your version beside its own and explains
+   the difference — it must not rewrite the file for you.
+2. You say you want another go. The agent explains again and you pick **Let me try** again.
+3. The tutorial reopens with *this* round's code, and you type the fix.
+
+Two things had to be true for step 2 to work, and neither was at first. The agent's intent in round
+two is often **byte-identical** to round one — it is the same correct file, arriving as a fix — so a
+repeat check keyed on the agent's code alone mistook the follow-up for a retry and refused to open
+the tutorial at all. And `/try` looked for a ticket before a pre-explanation, so even when it did
+open, it opened with round one's code.
+
+Both are the same rule: **the newest intent wins**. A fresh pre-explanation, or a try you have just
+armed, means a new round is under way and every stale-state guard must stand aside for it. See
+[decisions.md](../decisions.md).
+
+`test/paths.test.ts` walks all of it — right→right with identical code, wrong→right, nothing→right,
+try→yes, yes→try — because these are sequence bugs, and only a sequence test catches them.
 
 Nothing new is generated for the tutorial. Under `surface: prompt` the ticket is deliberately kept
 after the prompt is shown, so the daemon still holds the code (from `toolInput`) and the notes

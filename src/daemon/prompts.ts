@@ -145,15 +145,19 @@ export function learnerAlreadyWrote(target: string): string {
   ].join('\n');
 }
 
-export function learnerFinished(target: string, yours: string, theirs: string): string {
+export function learnerFinished(
+  target: string,
+  learnerWrote: string,
+  agentIntended: string,
+): string {
   return [
     `[let-me-explain] The learner finished ${target}. Do not retry this edit.`,
     ``,
     `--- what they wrote ---`,
-    yours,
+    learnerWrote,
     ``,
     `--- what you intended ---`,
-    theirs,
+    agentIntended,
     ``,
     `Compare them briefly and kindly: what matches, what differs, and whether theirs is simply`,
     `a different valid choice rather than wrong. Do not rewrite the file for them.`,

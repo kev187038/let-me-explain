@@ -12,7 +12,12 @@ import {
 } from '../contracts/index.js';
 import { cleanAll, cleanSession, listTutorials } from '../core/cleanup.js';
 import type { Env } from '../core/paths.js';
-import { alignNotes, unexplained, validateExplanation } from '../core/explanation.js';
+import {
+  alignNotes,
+  unexplained,
+  validateExplanation,
+  validateNotes,
+} from '../core/explanation.js';
 import { explainableLines, requiredLineNumbers } from '../core/lines.js';
 import { TOOL_VERSION } from '../version.js';
 import type { Logger } from './log.js';
@@ -129,7 +134,7 @@ export function createApp(deps: DaemonDeps): Hono {
       // just wrote. Both branches deny.
       return deny(
         outcome.status === 'done'
-          ? learnerFinished(explainable.target, outcome.yours, outcome.theirs)
+          ? learnerFinished(explainable.target, outcome.learnerWrote, outcome.agentIntended)
           : stillTyping(explainable.target),
       );
     };
@@ -137,9 +142,19 @@ export function createApp(deps: DaemonDeps): Hono {
     const alreadyTyping = await parkIfTyping();
     if (alreadyTyping) return c.json(alreadyTyping);
 
-    // They already typed this one. Falling through would find the ticket still
-    // awaiting a decision and ask them to approve overwriting their own work.
+    // They already typed this one, and nothing newer has been proposed since:
+    // falling through would find a ticket awaiting a decision and ask them to
+    // approve overwriting their own work.
+    //
+    // A fresh pre-explanation or an armed try means a *new* round is under way
+    // — the learner asking to type it again, or the agent proposing a fix — and
+    // this gate must stand aside for it. Same reasoning as `/try` preferring a
+    // pre-explanation over a ticket: the newest intent wins.
+    const newRound =
+      tries.isArmed(event.sessionId, explainable.target) ||
+      store.hasPreExplanation(event.sessionId, explainable.target);
     if (
+      !newRound &&
       tries.alreadyWritten(
         event.sessionId,
         explainable.target,
@@ -295,6 +310,18 @@ export function createApp(deps: DaemonDeps): Hono {
     // the hook binds it when the matching tool call turns up.
     if (parsed.data.ticket === undefined) {
       const { sessionId, target, lines, why } = parsed.data;
+      // The change has not happened yet, so coverage cannot be judged — but
+      // "no notes at all" and "a wall of text" can be, and this is now the
+      // path almost every explanation takes.
+      const valid = validateNotes(target as string, parsed.data);
+      if (!valid.ok) {
+        await log.append({
+          type: 'explain.rejected',
+          sessionId: sessionId as string,
+          reason: valid.error,
+        });
+        return c.json({ ok: false, error: valid.error }, 400);
+      }
       store.addPreExplanation({
         sessionId: sessionId as string,
         target: target as string,
@@ -397,16 +424,18 @@ export function createApp(deps: DaemonDeps): Hono {
       return c.json({ ok: true, status: 'open' });
     }
 
+    // Checked *before* any ticket: a pre-explanation means the agent has
+    // explained a change it has not yet attempted, which is by definition newer
+    // than any ticket for this file. Looking at tickets first replayed the
+    // previous round's code on a second "let me try" in the same session.
+    if (store.hasPreExplanation(sessionId, target)) {
+      tries.arm(sessionId, target, cwd ?? '', sessionEnv);
+      await log.append({ type: 'try.armed', sessionId, target });
+      return c.json({ ok: true, status: 'armed' });
+    }
+
     const view = store.viewFor(sessionId, target);
     if (!view) {
-      // Explained but not yet attempted — the normal path now that the learner
-      // chooses from a menu before the tool call. Remember the choice; the
-      // tutorial is written when the tool call brings the code.
-      if (store.hasPreExplanation(sessionId, target)) {
-        tries.arm(sessionId, target, cwd ?? '', sessionEnv);
-        await log.append({ type: 'try.armed', sessionId, target });
-        return c.json({ ok: true, status: 'armed' });
-      }
       return c.json(
         {
           ok: false,

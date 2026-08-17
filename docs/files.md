@@ -83,6 +83,10 @@ The ticket store: content-addressed lookup, the state machine, the deferred-prom
 **Why tickets are keyed by `(sessionId, hash)` and not by hash alone:** two sessions making a
 byte-identical edit must each get their own approval.
 
+**Why `viewFor` returns the newest match:** a Map iterates in insertion order, so a bare `.find()`
+handed back the *oldest* ticket for a file — which made a second change in one session get answered
+with the first change's code, deterministically. Deterministically wrong is still wrong.
+
 **Why a decision is *stored* on the ticket, not just signalled:** you can approve before the agent
 gets round to retrying. `resolve()` fired with nobody listening is lost, and the retry would then
 park until timeout. State survives the gap; a signal does not.
@@ -226,6 +230,17 @@ Writes the tutorial, opens the surfaces, watches the file, hands back what the l
 **Why it watches the directory rather than the file:** a file that does not exist yet cannot be
 watched, and many editors save by replacing the inode instead of writing in place.
 
+**Why a finished try retires its ticket (`onFinished`):** the ticket store deliberately keeps
+try-resolved tickets visible so a tutorial can be reopened, and nothing ever told it the try had
+ended. Two stores held state about one change and only one learned the outcome — so the agent's
+next call found a ticket still awaiting a decision and the learner was asked to approve
+overwriting the file they had just typed.
+
+**Why the fields are `learnerWrote` / `agentIntended` and not `yours` / `theirs`:** the old names
+were perspective-relative, and "theirs" meant the agent's code inside `Attempt` but the learner's
+in the prompt. That ambiguity is exactly how the repeat-gate came to compare the wrong operand.
+Names that state whose code they hold make the mistake unwriteable.
+
 **Why the wait is 45 s:** the MCP SDK's `DEFAULT_REQUEST_TIMEOUT_MSEC` is 60 s. A call returns
 `waiting` before that expires and the agent calls again — expiry is a normal outcome, not an error.
 
@@ -344,6 +359,7 @@ so nothing depends on it being installed.
 | `test/live/journey.live.test.ts` | The same journey against a real `claude -p` session. Opt-in via `npm run test:e2e`; reports deny-rate |
 | `test/cli.test.ts` | The CLI as a subprocess against a real daemon. Added because `cli.ts` had no coverage at all, which is where `done` was silently broken |
 | `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
+| `test/paths.test.ts` | **Every route a learner can take, walked as a sequence.** Single rounds, two rounds on one file, repeat protection, each finish signal, concurrency, and degenerate input. Added because every bug that reached real use was a *sequence* bug — a second round replaying the first, a finished try leaving its ticket alive, a fix mistaken for a repeat — and unit suites test components, not orderings. Writing it out found an unreported gap: the pre-explanation path validated nothing at all |
 
 ---
 

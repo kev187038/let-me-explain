@@ -10,7 +10,7 @@ import { createLogger } from './log.js';
 import { createModeStore } from './mode.js';
 import { createApp } from './routes.js';
 import { createTicketStore } from './tickets.js';
-import { createTryStore } from './try.js';
+import { createTryStore, spawnLauncher } from './try.js';
 import { cleanOlderThan } from '../core/cleanup.js';
 import { LIMITS } from '../contracts/index.js';
 import { createToolNames } from './tool-name.js';
@@ -58,10 +58,13 @@ async function main(): Promise<void> {
   const store = createTicketStore();
   // End-to-end runs drive the real daemon; without this they would open a real
   // editor window per try.
+  // A finished try retires its ticket, so a second change to the same file in
+  // one session cannot be answered with the first one's code.
+  const retire = (ticket: string) => store.consume(ticket);
   const tries =
     process.env.LET_ME_EXPLAIN_NO_LAUNCH === '1'
-      ? createTryStore(env, fsIo, () => {})
-      : createTryStore(env, fsIo);
+      ? createTryStore(env, fsIo, () => {}, retire)
+      : createTryStore(env, fsIo, spawnLauncher, retire);
   // Backstop for sessions that were killed rather than closed.
   await cleanOlderThan(env, LIMITS.tutorialMaxAgeMs).catch(() => {});
   const app = createApp({

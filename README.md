@@ -93,8 +93,8 @@ of ticking a checkbox.
 ```bash
 cd vscode-extension
 npm install
-npm run package                                    # → let-me-explain-0.1.0.vsix
-code --install-extension let-me-explain-0.1.0.vsix
+npm run package                                    # → let-me-explain-0.2.1.vsix
+code --install-extension let-me-explain-0.2.1.vsix
 ```
 
 Then reload VS Code (`Ctrl+Shift+P` → *Developer: Reload Window*). Check it landed:
