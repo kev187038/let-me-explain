@@ -11,6 +11,12 @@ export const HookEventSchema = z.object({
   cwd: z.string(),
   toolName: z.string().min(1),
   toolInput: z.record(z.unknown()),
+  /**
+   * Claude Code's permission mode for this call. It decides whether
+   * `updatedInput` is honoured — measured, see PERMISSIVE_MODES in the daemon.
+   * Optional so an older shim still parses.
+   */
+  permissionMode: z.string().optional(),
 });
 export type HookEvent = z.infer<typeof HookEventSchema>;
 
@@ -117,13 +123,26 @@ export interface PendingView {
   why?: string;
 }
 
-// The JSON Claude Code expects on stdout from a PreToolUse hook.
+// The JSON Claude Code expects on stdout from a PreToolUse hook. Field names
+// read from the schema the installed CLI validates against:
+//   { hookEventName, permissionDecision?, permissionDecisionReason?,
+//     updatedInput?, additionalContext? }
 export interface PreToolUseOutput {
   hookSpecificOutput: {
     hookEventName: 'PreToolUse';
     permissionDecision: 'allow' | 'deny' | 'ask';
     permissionDecisionReason?: string;
+    /** Replaces the tool's arguments before it runs. */
+    updatedInput?: Record<string, unknown>;
+    /** Reaches the model as a note attached to the tool call. */
+    additionalContext?: string;
   };
+  /**
+   * Shown to the *user* as a dim, neutral line — not an error. A sibling of
+   * `hookSpecificOutput`, never inside it, and dropped entirely if that object
+   * is absent.
+   */
+  systemMessage?: string;
 }
 
 export const LIMITS = {

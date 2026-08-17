@@ -39,9 +39,18 @@ const post = (path: string, body: unknown, headers = AUTH) =>
 
 async function decision(res: Response | Promise<Response>) {
   const body = (await (await res).json()) as {
-    hookSpecificOutput: { permissionDecision: string; permissionDecisionReason?: string };
+    hookSpecificOutput: {
+      permissionDecision: string;
+      permissionDecisionReason?: string;
+      additionalContext?: string;
+      updatedInput?: Record<string, unknown>;
+    };
   };
-  return body.hookSpecificOutput;
+  const out = body.hookSpecificOutput;
+  // The handback arrives as a deny reason when the write had to be refused, and
+  // as `additionalContext` when it was neutralised instead. Tests care that the
+  // learner's code reached the agent, not which field carried it.
+  return { ...out, permissionDecisionReason: out.permissionDecisionReason ?? out.additionalContext };
 }
 
 /** The agent explains a change it has not yet made — the pre-explanation path. */
@@ -123,7 +132,10 @@ describe('A. a single round', () => {
     await done();
 
     const out = await decision(parked);
-    expect(out.permissionDecision).toBe('deny');
+    // Neutralised rather than refused: the write runs with the learner's own
+    // bytes, so the flow that succeeded does not render as a red error.
+    expect(out.permissionDecision).toBe('allow');
+    expect(out.updatedInput).toMatchObject({ content: 'const a = 1\n' });
     expect(out.permissionDecisionReason).toContain('what they wrote');
     expect(out.permissionDecisionReason).toContain('what you intended');
   });
@@ -193,8 +205,8 @@ describe('B. two rounds on the same file', () => {
   it('B2. right then right, identical code both times, is not a repeat', async () => {
     await round('const a = 1', 'const a = 1\n', 'one');
     const out = await round('const a = 1', 'const a = 1\n', 'two');
-    expect(out.permissionDecisionReason).toContain('finished');
-    expect(out.permissionDecisionReason).not.toContain('already typed');
+    expect(out.permissionDecisionReason).toContain('typed src/a.ts themselves');
+    expect(out.permissionDecisionReason).not.toContain('already typed this');
   });
 
   it('B3. wrong then right: the fix reaches the comparison', async () => {
@@ -301,7 +313,7 @@ describe('D. saying you are done', () => {
     const { parked } = await inFlight();
     await learnerTypes('src/a.ts', 'const a = 1\n');
     await tickBox('src/a.ts');
-    expect((await decision(parked)).permissionDecisionReason).toContain('finished');
+    expect((await decision(parked)).permissionDecisionReason).toContain('typed src/a.ts');
   });
 
   it('D2. `done` with no arguments, when only one is waiting', async () => {
@@ -361,9 +373,11 @@ describe('E. more than one thing at once', () => {
     await post('/mode', { mode: 'off' });
     await learnerTypes('src/a.ts', 'const a = 1\n');
     await done();
+    await decision(parked);
 
-    // Still denied, not allowed through to overwrite what they typed.
-    expect((await decision(parked)).permissionDecision).toBe('deny');
+    // The protection is the content, not the verdict: whether the write was
+    // refused or neutralised, their bytes are what is on disk.
+    expect(await readFile(join(repo, 'src/a.ts'), 'utf8')).toBe('const a = 1\n');
   });
 
   it('E4. the window surface reaches the same place through the buttons', async () => {
@@ -420,7 +434,7 @@ describe('F. things that should fail cleanly', () => {
     await rm(tutorialPath(env, S, 'src/a.ts'), { force: true });
     await learnerTypes('src/a.ts', 'const a = 1\n');
     expect(((await (await done()).json()) as { ok: boolean }).ok).toBe(true);
-    expect((await decision(parked)).permissionDecision).toBe('deny');
+    expect((await decision(parked)).permissionDecision).toBe('allow');
   });
 
   it('F4. a tool with nothing to explain passes straight through', async () => {
@@ -433,5 +447,185 @@ describe('F. things that should fail cleanly', () => {
       }),
     );
     expect(out.permissionDecision).toBe('allow');
+  });
+});
+
+// ------------------------------------------------- G. the shape of the handback
+
+// A denial renders as a red error, which is wrong for a flow that succeeded.
+// Where the write can be made harmless it is allowed instead — but only where
+// that is provably safe, and the learner's bytes are what matters either way.
+describe('G. handing back without an error', () => {
+  async function tryRound(target: string, tool: string, input: Record<string, unknown>) {
+    await explain(target);
+    await chooseTry(target);
+    const parked = app.request('/hook', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({ sessionId: S, cwd: repo, toolName: tool, toolInput: input }),
+    });
+    await settle();
+    await learnerTypes(target, 'MINE\n').catch(() => {});
+    await done();
+    return decision(parked);
+  }
+
+  it('G1. a Write is neutralised, not refused', async () => {
+    const out = await tryRound('src/a.ts', 'Write', {
+      file_path: 'src/a.ts',
+      content: 'const a = 1',
+    });
+    expect(out.permissionDecision).toBe('allow');
+    // The whole input is replaced, so untouched fields must be carried over.
+    expect(out.updatedInput).toEqual({ file_path: 'src/a.ts', content: 'MINE\n' });
+    // A reason on an allow is never shown; it would be dead weight in context.
+    expect(out.permissionDecisionReason).toBe(out.additionalContext);
+    expect(await readFile(join(repo, 'src/a.ts'), 'utf8')).toBe('MINE\n');
+  });
+
+  it('G2. an Edit still denies — a no-op edit is not expressible', async () => {
+    const out = await tryRound('src/b.ts', 'Edit', {
+      file_path: 'src/b.ts',
+      old_string: 'a',
+      new_string: 'const b = 2',
+    });
+    expect(out.permissionDecision).toBe('deny');
+    expect(out.permissionDecisionReason).toContain('what they wrote');
+  });
+
+  it('G3. a Bash command still denies — there is no file to hand back', async () => {
+    await explain('shell');
+    await chooseTry('shell');
+    const parked = app.request('/hook', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({
+        sessionId: S,
+        cwd: repo,
+        toolName: 'Bash',
+        toolInput: { command: 'ls -la' },
+      }),
+    });
+    await settle();
+    await done();
+    expect((await decision(parked)).permissionDecision).toBe('deny');
+  });
+
+  it('G4. a permission mode that ignores updatedInput keeps denying', async () => {
+    await explain('src/c.ts');
+    await chooseTry('src/c.ts');
+    const parked = app.request('/hook', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({
+        sessionId: S,
+        cwd: repo,
+        toolName: 'Write',
+        toolInput: { file_path: 'src/c.ts', content: 'const c = 3' },
+        // Measured: under acceptEdits the rewrite lands only ~1 time in 3,
+        // because the write is pre-approved and the hook no longer satisfies
+        // the permission interaction. Denying is the safe answer there.
+        permissionMode: 'acceptEdits',
+      }),
+    });
+    await settle();
+    await learnerTypes('src/c.ts', 'MINE\n');
+    await done();
+
+    const out = await decision(parked);
+    expect(out.permissionDecision).toBe('deny');
+    expect(await readFile(join(repo, 'src/c.ts'), 'utf8')).toBe('MINE\n');
+  });
+
+  it('G5. still typing always denies, because the deny is what extends the wait', async () => {
+    await explain('src/d.ts');
+    await chooseTry('src/d.ts');
+    const short = createApp({
+      store,
+      tries,
+      env,
+      mode,
+      log: createLogger(fsIo, env),
+      toolNames: createToolNames(),
+      token: TOKEN,
+      tryWaitMs: 60,
+    });
+    const out = await decision(
+      short.request('/hook', {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({
+          sessionId: S,
+          cwd: repo,
+          toolName: 'Write',
+          toolInput: { file_path: 'src/d.ts', content: 'const d = 4' },
+        }),
+      }),
+    );
+    expect(out.permissionDecision).toBe('deny');
+    expect(out.permissionDecisionReason).toContain('still typing');
+  });
+
+  it('G6. the learner is told what happened, in neutral styling', async () => {
+    await explain('src/e.ts');
+    await chooseTry('src/e.ts');
+    const parked = app.request('/hook', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({
+        sessionId: S,
+        cwd: repo,
+        toolName: 'Write',
+        toolInput: { file_path: 'src/e.ts', content: 'const e = 5' },
+      }),
+    });
+    await settle();
+    await learnerTypes('src/e.ts', 'MINE\n');
+    await done();
+
+    const body = (await (await parked).json()) as { systemMessage?: string };
+    expect(body.systemMessage).toContain('e.ts is yours');
+  });
+});
+
+// --------------------------------------------------------- H. the safety net
+
+// `updatedInput` is honoured by the harness we measured, but this is the one
+// path in the system that must not fail open: if the rewrite were ever dropped,
+// the agent's version would land on the learner's file.
+describe('H. if the rewrite were ever ignored', () => {
+  async function neutralisedWrite(target: string, agentCode: string, learnerCode: string) {
+    await explain(target);
+    await chooseTry(target);
+    const parked = toolCall(target, agentCode);
+    await settle();
+    await learnerTypes(target, learnerCode);
+    await done();
+    expect((await decision(parked)).permissionDecision).toBe('allow');
+  }
+
+  it('H1. restores the learner’s file if the agent’s version landed', async () => {
+    await neutralisedWrite('src/a.ts', 'const a = 1', 'MINE\n');
+    // Simulate a harness that ignored `updatedInput`.
+    await learnerTypes('src/a.ts', 'const a = 1');
+
+    await new Promise((r) => setTimeout(r, 600));
+    expect(await readFile(join(repo, 'src/a.ts'), 'utf8')).toBe('MINE\n');
+  });
+
+  it('H2. leaves a later edit of the learner’s own alone', async () => {
+    await neutralisedWrite('src/b.ts', 'const b = 2', 'MINE\n');
+    // They kept typing after clicking done. This is not the agent's version, so
+    // restoring it would destroy work — the net must stay out of the way.
+    await learnerTypes('src/b.ts', 'MINE, IMPROVED\n');
+
+    await new Promise((r) => setTimeout(r, 600));
+    expect(await readFile(join(repo, 'src/b.ts'), 'utf8')).toBe('MINE, IMPROVED\n');
+  });
+
+  it('H3. does nothing when both versions already agree', async () => {
+    await neutralisedWrite('src/c.ts', 'const c = 3', 'const c = 3');
+    await new Promise((r) => setTimeout(r, 600));
+    expect(await readFile(join(repo, 'src/c.ts'), 'utf8')).toBe('const c = 3');
   });
 });

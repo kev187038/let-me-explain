@@ -359,7 +359,7 @@ so nothing depends on it being installed.
 | `test/live/journey.live.test.ts` | The same journey against a real `claude -p` session. Opt-in via `npm run test:e2e`; reports deny-rate |
 | `test/cli.test.ts` | The CLI as a subprocess against a real daemon. Added because `cli.ts` had no coverage at all, which is where `done` was silently broken |
 | `test/stats.test.ts` | The deny-rate arithmetic, reason grouping, wait medians, and tolerance of a truncated log line |
-| `test/paths.test.ts` | **Every route a learner can take, walked as a sequence.** Single rounds, two rounds on one file, repeat protection, each finish signal, concurrency, and degenerate input. Added because every bug that reached real use was a *sequence* bug — a second round replaying the first, a finished try leaving its ticket alive, a fix mistaken for a repeat — and unit suites test components, not orderings. Writing it out found an unreported gap: the pre-explanation path validated nothing at all |
+| `test/paths.test.ts` | **Every route a learner can take, walked as a sequence** — indexed in [reference/test-matrix.md](reference/test-matrix.md). Single rounds, two rounds on one file, repeat protection, each finish signal, concurrency, and degenerate input. Added because every bug that reached real use was a *sequence* bug — a second round replaying the first, a finished try leaving its ticket alive, a fix mistaken for a repeat — and unit suites test components, not orderings. Writing it out found an unreported gap: the pre-explanation path validated nothing at all |
 
 ---
 

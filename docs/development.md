@@ -106,6 +106,9 @@ concurrency, and degenerate input. Writing it out found a gap nobody had reporte
 
 **If you add a second entry point to an existing operation, add its row to that matrix.** The
 recurring failure is a guarantee attached to one code path while the traffic moves to another.
+The matrix is indexed and explained in
+[reference/test-matrix.md](reference/test-matrix.md) — change that page and `test/paths.test.ts`
+together.
 
 `npm run test:e2e` runs the same journey against a real `claude -p` session, with its own config
 (`vitest.e2e.config.ts`) so it never joins the fast suite. It needs credentials and a network and

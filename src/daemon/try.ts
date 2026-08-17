@@ -13,6 +13,10 @@ import type { FsIo } from '../io/fs-io.js';
 // several events for one write; this collapses them.
 const SETTLE_MS = 50;
 
+// How often to re-read the tutorial when no watcher could be created. Slow
+// enough to cost nothing, fast enough that ticking the box still feels instant.
+const POLL_MS = 1_000;
+
 export interface TryOutcome {
   status: 'done' | 'waiting';
   target: string;
@@ -76,6 +80,8 @@ export function createTryStore(
     agentIntended: string;
     waiters: ((o: TryOutcome) => void)[];
     watcher?: FSWatcher;
+    /** Fallback for when `fs.watch` is unavailable — see `begin`. */
+    poller?: NodeJS.Timeout;
     quiet?: NodeJS.Timeout;
     deadline?: NodeJS.Timeout;
   }
@@ -109,6 +115,7 @@ export function createTryStore(
 
     if (attempt.quiet) clearTimeout(attempt.quiet);
     if (attempt.deadline) clearTimeout(attempt.deadline);
+    if (attempt.poller) clearInterval(attempt.poller);
     attempt.deadline = undefined;
     attempt.watcher?.close();
 
@@ -266,7 +273,19 @@ export function createTryStore(
           }, SETTLE_MS);
         });
       } catch {
-        // No watcher: `let-me-explain done` still works.
+        // `fs.watch` can fail outright — EMFILE once the machine runs out of
+        // inotify instances, and some network filesystems never support it.
+        // Swallowing that silently left the checkbox dead: the learner ticks
+        // the box, nothing happens, and nothing says why. Polling is a worse
+        // mechanism and an infinitely better failure mode.
+        attempt.poller = setInterval(() => {
+          void readFile(tutorial, 'utf8')
+            .then((text) => {
+              if (isFinished(text)) void settle(id, 'done');
+            })
+            .catch(() => {});
+        }, POLL_MS);
+        attempt.poller.unref();
       }
 
       return { tutorial, target: targetPath };
@@ -322,6 +341,7 @@ export function createTryStore(
       for (const attempt of attempts.values()) {
         if (attempt.quiet) clearTimeout(attempt.quiet);
         if (attempt.deadline) clearTimeout(attempt.deadline);
+        if (attempt.poller) clearInterval(attempt.poller);
         attempt.watcher?.close();
       }
       attempts.clear();

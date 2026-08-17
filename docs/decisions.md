@@ -296,6 +296,72 @@ seen in a real interactive session — the same reason deny-rate is tracked.
 
 ---
 
+## A successful handback is an `allow`, not a `deny`
+
+**Rejected:** keeping `deny` and rewording it so it reads less like a failure.
+
+**Why:** the red block is not styling we can soften. From the 2.1.233 binary:
+
+```
+case "deny": u.blockingError = { blockingError: …permissionDecisionReason…, command: t }
+```
+
+**A denial *is* an error object.** `suppressOutput` is a documented no-op, `terminalSequence`
+cannot restyle the transcript, and exit code 2 routes identically. So a flow that succeeded — the
+learner did the exercise — was rendering as a failure, with no field able to change that.
+
+**So the write is neutralised instead of refused.** `allow` + `updatedInput` rewrites the Write's
+content to the bytes already on disk; the tool runs, changes nothing, and renders green. The
+comparison rides in `additionalContext`, which reaches the model as a system reminder.
+
+**Measured, not assumed** (Claude Code 2.1.233, `claude -p`, three runs each):
+
+| Permission mode | `updatedInput` applied |
+|---|---|
+| `default` | 3 / 3 |
+| `acceptEdits` | 1 / 3 |
+
+Under `acceptEdits` the write is pre-approved, so the hook is no longer what satisfies the
+permission interaction and the rewrite is often skipped. The hook payload carries `permission_mode`,
+so the daemon decides per call: neutralise where it is reliable, deny everywhere else. A red block
+is a cosmetic problem; the agent's version landing on the learner's file is not.
+
+**Three cases keep denying on purpose.** `Edit`/`MultiEdit` need `old_string ≠ new_string`, so a
+no-op edit cannot be expressed; `Bash` has no file to hand back; and the wait-expiry path *wants*
+the retry, because retrying is how the wait is extended.
+
+**The handback is phrased as statements, not commands.** Claude Code wraps `additionalContext` in a
+system reminder, and text that reads like an out-of-band instruction trips the model's
+prompt-injection defences — it surfaces the text to the user instead of acting on it. Measured: a
+probe worded as an order (*"reply with exactly…"*) was refused outright, with the model correctly
+noting it had arrived through a tool-result channel.
+
+**A restore net backs it up**, because this is the one path that must not fail open. If the rewrite
+were ever dropped, the daemon puts the learner's bytes back — but only when the file matches the
+agent's version exactly, which is proof its write executed. An unconditional restore would clobber
+edits made in the seconds after clicking done.
+
+---
+
+## `fs.watch` failing is a real state, not an impossibility
+
+**Rejected:** `catch { /* no watcher: the CLI still works */ }`.
+
+**Why:** it was silent, and the failure it hid is total — the learner ticks the box and nothing
+happens, forever. It was found by accident: 236 leaked test daemons had exhausted the machine's 128
+inotify instances, so `fs.watch` threw `EMFILE` and every tutorial checkbox stopped working. Network
+filesystems never support it either.
+
+Polling the tutorial once a second is a worse mechanism and a far better failure mode. The lesson
+generalises past this file: **a catch block that swallows an error must leave the feature working,
+or it is just a delayed bug report.**
+
+The leak itself was a test-hygiene bug worth naming — `spawn('npx', …)` wraps `tsx` which wraps
+node, so `child.kill()` reaps the wrapper and orphans the daemon. Every suite that spawns one now
+uses `detached: true` and kills the process group.
+
+---
+
 ## The newest intent wins, everywhere
 
 Three separate bugs in one day turned out to be the same mistake, so the rule is written down

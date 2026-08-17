@@ -63,6 +63,8 @@ async function main(): Promise<void> {
 
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id : '';
+  const permissionMode =
+    typeof payload.permission_mode === 'string' ? payload.permission_mode : undefined;
   const cwd = typeof payload.cwd === 'string' ? payload.cwd : '';
   const toolInput =
     typeof payload.tool_input === 'object' && payload.tool_input !== null
@@ -102,7 +104,7 @@ async function main(): Promise<void> {
     const res = await fetch(`${base}/hook`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ sessionId, cwd, toolName, toolInput }),
+      body: JSON.stringify({ sessionId, cwd, toolName, toolInput, permissionMode }),
       signal: AbortSignal.timeout(DECISION_TIMEOUT_MS),
     });
     if (!res.ok) emit(ALLOW);

@@ -73,6 +73,21 @@ An unparseable body returns `allow` rather than an error — see the fail-open r
 
 ---
 
+### What the hook returns
+
+Beyond `permissionDecision` and `permissionDecisionReason`, two fields matter here:
+
+| Field | Where it goes |
+|---|---|
+| `updatedInput` | Replaces the tool's **entire** input object before it runs — include unchanged fields. Honoured on `allow` and `ask`, ignored on `deny`. |
+| `additionalContext` | Reaches the model as a system reminder beside the tool result. Never shown to the user. |
+| `systemMessage` *(top level)* | A dim, neutral line for the user. Dropped unless `hookSpecificOutput` is also present. |
+
+A finished try uses the first two to hand back without a denial — see
+[test-matrix.md](test-matrix.md) group G for exactly when that applies.
+
+---
+
 ## `POST /explain`
 
 Called by the MCP server on the agent's behalf, in one of two forms.

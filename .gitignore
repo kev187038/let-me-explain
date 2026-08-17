@@ -4,3 +4,5 @@ dist/
 vscode-extension/out/
 vscode-extension/node_modules/
 *.vsix
+shell
+./test-plugin

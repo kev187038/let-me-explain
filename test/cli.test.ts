@@ -90,7 +90,15 @@ beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'lme-cli-'));
   env = { home, xdgStateHome: join(home, 'state'), xdgRuntimeDir: join(home, 'run') };
 
-  daemon = spawn('npx', ['tsx', daemonEntry], { env: childEnv(), stdio: 'ignore' });
+  // detached so the whole group can be killed: `npx` wraps `tsx`, which wraps
+  // node, and killing only the wrapper leaves the daemon running. Repeated runs
+  // leaked hundreds of them, which eventually exhausted the machine's inotify
+  // instances and silently broke every tutorial watcher.
+  daemon = spawn('npx', ['tsx', daemonEntry], {
+    env: childEnv(),
+    stdio: 'ignore',
+    detached: true,
+  });
   for (let i = 0; i < 100; i++) {
     await sleep(100);
     if (await readDaemonAddress(env)) {
@@ -104,7 +112,13 @@ beforeAll(async () => {
 }, 40_000);
 
 afterAll(async () => {
-  daemon?.kill('SIGTERM');
+  if (daemon?.pid) {
+    try {
+      process.kill(-daemon.pid, 'SIGTERM');
+    } catch {
+      daemon.kill('SIGTERM');
+    }
+  }
   await rm(home, { recursive: true, force: true });
 });
 

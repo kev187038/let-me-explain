@@ -60,7 +60,14 @@ beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'lme-shim-'));
   env = { home, xdgStateHome: join(home, 'state'), xdgRuntimeDir: join(home, 'run') };
 
-  daemon = spawn('npx', ['tsx', daemonEntry], { env: childEnv(), stdio: 'ignore' });
+  // detached so the whole group dies: `npx` wraps `tsx` wraps node, and killing
+  // the wrapper alone leaves the daemon running. Leaked daemons accumulate
+  // inotify instances until `fs.watch` starts failing machine-wide.
+  daemon = spawn('npx', ['tsx', daemonEntry], {
+    env: childEnv(),
+    stdio: 'ignore',
+    detached: true,
+  });
 
   for (let i = 0; i < 100; i++) {
     await sleep(100);
@@ -70,7 +77,13 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  daemon?.kill('SIGTERM');
+  if (daemon?.pid) {
+    try {
+      process.kill(-daemon.pid, 'SIGTERM');
+    } catch {
+      daemon.kill('SIGTERM');
+    }
+  }
   await rm(home, { recursive: true, force: true });
 });
 

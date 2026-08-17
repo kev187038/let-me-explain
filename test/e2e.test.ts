@@ -71,11 +71,17 @@ const toolCall = (target: string, content: string) => ({
 });
 
 async function decisionOf(raw: string) {
-  return (
+  const out = (
     JSON.parse(raw) as {
-      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason?: string };
+      hookSpecificOutput: {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+        additionalContext?: string;
+        updatedInput?: Record<string, unknown>;
+      };
     }
   ).hookSpecificOutput;
+  return { ...out, permissionDecisionReason: out.permissionDecisionReason ?? out.additionalContext };
 }
 
 async function api(path: string, body?: unknown): Promise<unknown> {
@@ -226,11 +232,15 @@ describe('the whole journey', () => {
     expect(await finishTry(attempt!, childEnv())).toBe(true);
 
     const out = await decisionOf(await parked);
-    // Never `allow`: running the tool would overwrite what the learner wrote.
-    expect(out.permissionDecision).toBe('deny');
+    // Allowed with the learner's bytes substituted, so the write is a no-op and
+    // the successful handback does not render as a red error. The real shim
+    // carried the wider JSON through untouched.
+    expect(out.permissionDecision).toBe('allow');
+    expect(out.updatedInput).toMatchObject({
+      content: 'const ttl = 60 * 15 // 15 minutes\n',
+    });
     expect(out.permissionDecisionReason).toContain('const ttl = 60 * 15 // 15 minutes');
     expect(out.permissionDecisionReason).toContain('const ttl = 900');
-    expect(out.permissionDecisionReason).toContain('Do not retry');
 
     // The tutorial stays, marked, so the learner can still read it.
     const [tutorial] = await listTutorials(env);

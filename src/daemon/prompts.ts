@@ -145,13 +145,24 @@ export function learnerAlreadyWrote(target: string): string {
   ].join('\n');
 }
 
+/**
+ * The handback. Delivered either as a deny reason or, when the write could be
+ * neutralised, as `additionalContext`.
+ *
+ * Phrased as statements rather than commands on purpose: Claude Code wraps
+ * `additionalContext` in a system reminder, and text that reads like an
+ * out-of-band instruction trips the model's prompt-injection defences — it then
+ * surfaces the text to the user instead of acting on it. Measured: a probe
+ * worded as an order was refused outright.
+ */
 export function learnerFinished(
   target: string,
   learnerWrote: string,
   agentIntended: string,
+  opts: { ran: boolean } = { ran: false },
 ): string {
   return [
-    `[let-me-explain] The learner finished ${target}. Do not retry this edit.`,
+    `[let-me-explain] The learner typed ${target} themselves. What is on disk is theirs.`,
     ``,
     `--- what they wrote ---`,
     learnerWrote,
@@ -159,7 +170,11 @@ export function learnerFinished(
     `--- what you intended ---`,
     agentIntended,
     ``,
-    `Compare them briefly and kindly: what matches, what differs, and whether theirs is simply`,
-    `a different valid choice rather than wrong. Do not rewrite the file for them.`,
+    `Their version is the one that counts, and the file needs no further writing.`,
+    opts.ran
+      ? `The write you just made was replaced with their content, so the file is unchanged.`
+      : `Do not retry this edit.`,
+    `A short, kind comparison helps them: what matches, what differs, and whether`,
+    `theirs is a different valid choice rather than wrong.`,
   ].join('\n');
 }

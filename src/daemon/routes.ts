@@ -1,3 +1,5 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { Hono } from 'hono';
 import {
   DecisionRequestSchema,
@@ -79,6 +81,39 @@ const deny = (reason: string): PreToolUseOutput => ({
   },
 });
 
+/**
+ * Lets the tool run, but with arguments of our choosing and a note for the
+ * model. Used to hand a finished try back *without* a denial: the write is
+ * rewritten to the bytes already on disk, so it changes nothing.
+ *
+ * No `permissionDecisionReason` — on an allow it is never shown and would be
+ * dead weight in the agent's context.
+ */
+const allowWith = (
+  updatedInput: Record<string, unknown>,
+  additionalContext: string,
+  systemMessage: string,
+): PreToolUseOutput => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'allow',
+    updatedInput,
+    additionalContext,
+  },
+  systemMessage,
+});
+
+/**
+ * Modes where `updatedInput` is actually applied.
+ *
+ * Measured against Claude Code 2.1.233, not assumed: in `default` the rewrite
+ * landed 3 times out of 3; under `acceptEdits` only 1 of 3, because the write
+ * is pre-approved and the hook is no longer what satisfies the permission
+ * interaction. Anywhere else we deny instead — a red block is a cosmetic
+ * problem, and letting the agent's version overwrite the learner's is not.
+ */
+const PERMISSIVE_MODES = new Set(['default', 'plan']);
+
 // Hands the decision to Claude Code's own approval prompt, with the
 // explanation as the context shown to the learner.
 const ask = (reason: string): PreToolUseOutput => ({
@@ -89,6 +124,10 @@ const ask = (reason: string): PreToolUseOutput => ({
   },
 });
 
+// How long to keep checking that the learner's file survived the write we just
+// allowed. Two looks: one for a fast write, one for a slow disk.
+const RESTORE_CHECKS_MS = [250, 2_000];
+
 export function createApp(deps: DaemonDeps): Hono {
   const { store, mode, log, toolNames, tries, env, token } = deps;
   const decisionTimeoutMs = deps.decisionTimeoutMs ?? LIMITS.decisionTimeoutMs;
@@ -97,6 +136,33 @@ export function createApp(deps: DaemonDeps): Hono {
   let watcherSeenAt = deps.watcherSeenAt ?? 0;
   const tryWaitMs = deps.tryWaitMs ?? LIMITS.tryHookWaitMs;
   const app = new Hono();
+
+  /**
+   * Insurance for the neutralised write. If `updatedInput` were ever dropped,
+   * the agent's version would land on the learner's file — so we check, and put
+   * their bytes back.
+   *
+   * It restores *only* when the file matches what the agent intended, which is
+   * proof its write executed. An unconditional restore would clobber edits the
+   * learner made in the seconds after clicking done.
+   */
+  function verifyNotOverwritten(
+    sessionId: string,
+    outcome: { target: string; learnerWrote: string; agentIntended: string },
+  ): void {
+    if (outcome.agentIntended.trim() === outcome.learnerWrote.trim()) return;
+    for (const delay of RESTORE_CHECKS_MS) {
+      const timer = setTimeout(() => {
+        void (async () => {
+          const now = await readFile(outcome.target, 'utf8').catch(() => null);
+          if (now === null || now.trim() !== outcome.agentIntended.trim()) return;
+          await writeFile(outcome.target, outcome.learnerWrote).catch(() => {});
+          await log.append({ type: 'try.restored', sessionId, target: outcome.target });
+        })();
+      }, delay);
+      timer.unref();
+    }
+  }
 
   app.use('*', async (c, next) => {
     if (c.req.path === '/health') return next();
@@ -130,12 +196,42 @@ export function createApp(deps: DaemonDeps): Hono {
         sessionId: event.sessionId,
         target: explainable.target,
       });
-      // Never `allow` here: letting the tool run would overwrite what they
-      // just wrote. Both branches deny.
-      return deny(
-        outcome.status === 'done'
-          ? learnerFinished(explainable.target, outcome.learnerWrote, outcome.agentIntended)
-          : stillTyping(explainable.target),
+      // Still typing always denies: the deny is what makes the agent retry,
+      // and retrying is how the wait is extended.
+      if (outcome.status !== 'done') return deny(stillTyping(explainable.target));
+
+      // A dim, neutral line for the learner — the one thing they see either way.
+      const note = `${basename(explainable.target)} is yours. Claude has your version and is comparing it.`;
+
+      // A denial renders as a red error, and this is a success — the learner
+      // did the exercise. So where we can, let the write run with *their* bytes
+      // instead of refusing it: same file, no error. Only `Write` can be
+      // neutralised this way; an Edit needs `old_string` to differ from
+      // `new_string`, and a Bash "target" is not a file at all.
+      const bare = event.toolName.split('__').pop() ?? event.toolName;
+      const neutralisable =
+        bare === 'Write' &&
+        explainable.target !== 'shell' &&
+        PERMISSIVE_MODES.has(event.permissionMode ?? 'default');
+
+      if (!neutralisable) {
+        return {
+          ...deny(
+            learnerFinished(explainable.target, outcome.learnerWrote, outcome.agentIntended),
+          ),
+          systemMessage: note,
+        };
+      }
+
+      verifyNotOverwritten(event.sessionId, outcome);
+      // `updatedInput` replaces the whole input object, so the untouched fields
+      // are spread back in rather than sent alone.
+      return allowWith(
+        { ...event.toolInput, content: outcome.learnerWrote },
+        learnerFinished(explainable.target, outcome.learnerWrote, outcome.agentIntended, {
+          ran: true,
+        }),
+        note,
       );
     };
 

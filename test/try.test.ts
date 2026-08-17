@@ -93,9 +93,19 @@ describe('let-me-try', () => {
 
   async function reasonOf(res: Response) {
     const body = (await res.json()) as {
-      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason?: string };
+      hookSpecificOutput: {
+        permissionDecision: string;
+        permissionDecisionReason?: string;
+        additionalContext?: string;
+        updatedInput?: Record<string, unknown>;
+      };
     };
-    return body.hookSpecificOutput;
+    const out = body.hookSpecificOutput;
+    // Either channel carries the handback; the assertion is about the content.
+    return {
+      ...out,
+      permissionDecisionReason: out.permissionDecisionReason ?? out.additionalContext,
+    };
   }
 
   it('refuses when nothing is pending for that file', async () => {
@@ -147,7 +157,7 @@ describe('let-me-try', () => {
       expect((await tries.finish(SESSION, 'src/greet.js')).ok).toBe(true);
 
       const out = await reasonOf(await parked);
-      expect(out.permissionDecision).toBe('deny');
+      expect(out.permissionDecision).toBe('allow');
       expect(out.permissionDecisionReason).toContain('hi there');
     });
 
@@ -196,8 +206,8 @@ describe('let-me-try', () => {
 
     const out = await reasonOf(await two);
     // The comparison, not a refusal to open.
-    expect(out.permissionDecisionReason).toContain('finished');
-    expect(out.permissionDecisionReason).not.toContain('already typed');
+    expect(out.permissionDecisionReason).toContain('typed src/a.ts themselves');
+    expect(out.permissionDecisionReason).not.toContain('already typed this');
     expect(out.permissionDecisionReason).toContain('const a = 1');
   });
 
@@ -267,11 +277,12 @@ describe('let-me-try', () => {
     await post('/done', { sessionId: SESSION, target: 'src/a.ts' });
 
     const out = await reasonOf(await parked);
-    // Never allow: running the tool would overwrite what they just wrote.
-    expect(out.permissionDecision).toBe('deny');
+    // Allowed, but with the learner's bytes substituted — so the write cannot
+    // overwrite what they just typed, and a success does not render as an error.
+    expect(out.permissionDecision).toBe('allow');
+    expect(out.updatedInput).toMatchObject({ content: 'const a = 2 // my version\n' });
     expect(out.permissionDecisionReason).toContain('const a = 2 // my version');
     expect(out.permissionDecisionReason).toContain('const a = 1');
-    expect(out.permissionDecisionReason).toContain('Do not retry');
   });
 
   it('says "still typing" rather than allowing when the wait expires', async () => {
@@ -353,7 +364,7 @@ describe('let-me-try', () => {
     await writeFile(tut, text.replace("- [ ] I'm done", "- [x] I'm done"));
 
     const out = await reasonOf(await parked);
-    expect(out.permissionDecision).toBe('deny');
+    expect(out.permissionDecision).toBe('allow');
     expect(out.permissionDecisionReason).toContain('const a = 2');
   });
 
