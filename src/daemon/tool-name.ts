@@ -14,6 +14,11 @@ export function createToolNames(fallback: string = DEFAULT_EXPLAIN_TOOL) {
     explain(): string {
       return learned ?? fallback;
     },
+    // Both tools are registered by the same MCP server, so they differ only in
+    // the final segment — learning one name gives us the other for free.
+    letMeTry(): string {
+      return (learned ?? fallback).replace(/__explain$/, '__let_me_try');
+    },
   };
 }
 

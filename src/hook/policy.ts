@@ -15,7 +15,7 @@ const CONTROL_COMMAND = new RegExp(
 );
 
 export function isOwnMachinery(toolName: string, toolInput: Record<string, unknown>): boolean {
-  if (/^mcp__.+__(explain|answer)$/.test(toolName)) return true;
+  if (/^mcp__.+__(explain|answer|let_me_try)$/.test(toolName)) return true;
   if (toolName === 'Bash') {
     const command = typeof toolInput.command === 'string' ? toolInput.command : '';
     return CONTROL_COMMAND.test(command);

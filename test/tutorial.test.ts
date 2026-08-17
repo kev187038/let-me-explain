@@ -222,3 +222,21 @@ describe('planLaunch', () => {
     expect(plan[0]?.command).toBe('xterm');
   });
 });
+
+describe('gaps in the explanation', () => {
+  it('marks a line the agent did not explain instead of leaving it bare', () => {
+    const text = renderTutorial({
+      target: 'src/a.ts',
+      why: 'the value was hard-coded',
+      lines: [
+        { n: 1, code: 'const a = 1', note: 'sets a', required: true },
+        { n: 2, code: 'const b = 2', required: true },
+        { n: 3, code: '}' },
+      ],
+    });
+    expect(text).toContain('└ sets a');
+    expect(text).toContain('└ — not explained —');
+    // The closing brace was context, so it is shown bare rather than blamed.
+    expect(text.split('\n').filter((l) => l.includes('not explained'))).toHaveLength(1);
+  });
+});

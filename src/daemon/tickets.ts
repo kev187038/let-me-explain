@@ -9,8 +9,8 @@ import {
   type Ticket,
 } from '../contracts/index.js';
 import { hashToolCall } from '../core/canonical.js';
-import { validateExplanation } from '../core/explanation.js';
-import { explainableLines } from '../core/lines.js';
+import { alignNotes, validateExplanation } from '../core/explanation.js';
+import { explainableLines, requiredLineNumbers } from '../core/lines.js';
 
 export type Lookup =
   | { kind: 'minted'; ticket: Ticket }
@@ -75,6 +75,7 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
   function toView(t: Ticket): PendingView {
     const ex = explainableLines(t.toolName, t.toolInput);
     const notes = new Map(t.explanation?.lines.map((l) => [l.n, l.note]) ?? []);
+    const needed = new Set(ex ? requiredLineNumbers(ex) : []);
     return {
       ticket: t.id,
       sessionId: t.sessionId,
@@ -83,7 +84,13 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
       target: ex?.target ?? '',
       lines: (ex?.lines ?? []).map((code, i) => {
         const note = notes.get(i + 1);
-        return note === undefined ? { n: i + 1, code } : { n: i + 1, code, note };
+        const required = needed.has(i + 1);
+        return {
+          n: i + 1,
+          code,
+          ...(note === undefined ? {} : { note }),
+          ...(required ? { required: true } : {}),
+        };
       }),
       ...(t.explanation ? { why: t.explanation.why } : {}),
     };
@@ -143,7 +150,13 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
         preExplanations.delete(preKey);
         const valid = validateExplanation(explainable, pre);
         if (valid.ok) {
-          ticket.explanation = { lines: pre.lines, why: pre.why, at: pre.createdAt };
+          // Renumbered onto the lines they describe, whatever numbering the
+          // agent used when it explained ahead of the change.
+          ticket.explanation = {
+            lines: alignNotes(explainable, pre.lines),
+            why: pre.why,
+            at: pre.createdAt,
+          };
           ticket.state = 'awaiting_decision';
           return { kind: 'prebound', ticket };
         }
@@ -160,6 +173,14 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
 
     preExplanationCount(): number {
       return preExplanations.size;
+    },
+
+    // True when the agent has explained a change it has not yet attempted. The
+    // learner can already have chosen to type it themselves at that point, but
+    // the code to put in the tutorial only arrives with the tool call.
+    hasPreExplanation(sessionId: string, target: string): boolean {
+      sweep();
+      return preExplanations.has(key(sessionId, target));
     },
 
     get(id: string): Ticket | undefined {
@@ -195,6 +216,14 @@ export function createTicketStore(opts: TicketStoreOptions = {}) {
           );
         }
       });
+    },
+
+    // True only while a /hook request is parked on this ticket. On the prompt
+    // surface Claude Code owns the decision and no one is waiting here, so a
+    // ticket sitting in `awaiting_decision` is not something a button can act
+    // on — it would resolve a decision nobody asked us for.
+    isHeld(id: string): boolean {
+      return (waiters.get(id)?.length ?? 0) > 0;
     },
 
     decide(id: string, decision: Decision): boolean {

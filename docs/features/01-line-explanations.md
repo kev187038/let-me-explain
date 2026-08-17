@@ -32,35 +32,56 @@ explanation down to where the actual learning is.
 | `Bash` | every line of `command` |
 | anything else | none — passes straight through |
 
-Two deliberate exclusions:
+Three deliberate exclusions:
 
 - **The old side of an edit is never explained.** You learn from what is being written, not from
   what is being deleted.
 - **Blank lines are exempt.** Demanding a note for them is noise the agent has to generate and
   you have to skip.
+- **Unchanged context is exempt.** An `Edit` has to carry surrounding lines inside `new_string` so
+  its match is unique. Requiring a note for them rejected *every* real code edit once, and made
+  the agent narrate code it was not touching. Notes now land only on what actually changed.
 
-## Coverage is an invariant, not a request
+  Context is detected by set membership against `old_string` rather than a real diff: a few lines,
+  no dependency, and its one inaccuracy is benign — a new line whose text matches an old one is
+  nearly always structural (`}`, `});`, `else {`), which deserves no note anyway.
 
-This is the load-bearing decision. Feature 1 says "every line, explained" — a prompt asking for
-that is a *request* the model may partially satisfy. `src/core/explanation.ts` validates the
-explanation at the tool boundary and rejects it otherwise, so the model structurally cannot
-proceed without full coverage.
+## Coverage is shown, not enforced
 
-Rejections are returned to the agent as tool errors, which it reads and acts on:
+This was once the load-bearing decision and it has been reversed — see
+[decisions.md](../decisions.md). Coverage *was* validated at the tool boundary, on the reasoning
+that a prompt is a request and validation is a guarantee. The mechanism was right; the cost was
+not. The validator refused real explanations three times in a row, each for a different reason —
+notes on unchanged context, numbering by file position, then simply *more* notes than the minimum
+— and each fix revealed the next. A strict validator aimed at a model whose output shape varies
+keeps finding new ways to say no, and every no costs a round trip and an error you have to decode.
+
+So `src/core/explanation.ts` now accepts whatever notes arrive:
+
+- `alignNotes()` matches notes to lines **by number when those numbers point at real lines**, and
+  **in the order given** otherwise. The agent may number from 1 within the change or by position
+  in the file; both work.
+- A line with no note renders as `— not explained —` in the prompt and in the tutorial. You see
+  the change with a visible hole rather than not seeing the change at all.
+- `unexplained()` reports the gaps, which the daemon logs as `explain.coverage`.
+
+What is still refused, because it is cheap for the agent to fix and unambiguous to check:
 
 ```console
-$ # explained only line 1 of 2
-{"ok":false,"error":"Missing notes for line(s): 2. Every non-blank line needs exactly one note."}
-
-$ # a 30-word note
+$ # a 30-word note on code
 {"ok":false,"error":"Note(s) on line(s) 1 exceed 25 words. Say the one thing that line does, plainly."}
 
-$ # numbered past the end of the change
-{"ok":false,"error":"Line 9 does not exist — this change has 3 line(s). Number lines from 1 within the new content only."}
+$ # the tool called with no explanation at all
+{"ok":false,"error":"Send at least one note — this is the explanation the learner reads."}
 ```
 
 Every message names what to do next, not just what went wrong. That is what makes them work as
 prompts rather than as complaints.
+
+**Coverage did not stop mattering — it stopped being a gate.** The injected instructions still ask
+for one note per changed line, and `let-me-explain stats` reports the share that arrived
+explained, so under-explaining is visible instead of silent. The general rule: enforce what is
+cheap to satisfy and unambiguous to check; measure what is neither.
 
 ## Brevity is enforced, because brevity is the product
 
@@ -70,7 +91,16 @@ That is a testable assertion, so it is one. `src/contracts/index.ts`:
 | Limit | Value | Why |
 |---|---|---|
 | `maxNoteWords` | 25 | One line does one thing; 25 words is enough to say it |
+| `maxShellNoteWords` | 45 | A command is one line but carries several flags, and each one is worth naming |
 | `maxWhyWords` | 90 | The wider context is a paragraph, not an essay |
+
+A shell command gets the larger budget because it is a single line standing in for a lot:
+
+```
+1  find . -name "*.tmp" -exec rm {} \;
+   └ searches from here down; -name matches the pattern, -exec runs rm
+     on each hit, \; ends the command
+```
 
 These caps are the part of feature 3 that ships today. The full instruction layer — curbing AI
 lingo, banning filler phrases, stopping useless code comments — is planned, along with an eval

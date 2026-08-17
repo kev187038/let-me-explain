@@ -9,6 +9,8 @@ export interface TutorialLine {
   n: number;
   code: string;
   note?: string;
+  /** Whether a note was expected here. Context and blank lines are not. */
+  required?: boolean;
 }
 
 export interface TutorialInput {
@@ -93,6 +95,10 @@ export function renderTutorial(input: TutorialInput): string {
   const pad = ' '.repeat(width + 2);
   for (const line of lines) {
     out.push(`${String(line.n).padStart(width)}  ${line.code}`);
+    // Only where a note was expected: an unchanged context line is not a gap.
+    if (!line.note && line.required) {
+      out.push(`${pad}└ — not explained —`);
+    }
     if (line.note) {
       // Only the first wrapped row carries the arrow; the rest align under it.
       for (const [i, text] of wrap(line.note, WRAP - pad.length - 2).entries()) {
@@ -113,6 +119,9 @@ export function renderTutorial(input: TutorialInput): string {
   out.push(...wrap(`Put an x in the box and save this file.`, WRAP));
   out.push(``, `- [ ] I'm done`, ``);
   out.push(...wrap(`Take as long as you like — nothing else ends the wait.`, WRAP));
+  out.push(``);
+  out.push(`Or click "✓ I'm done" in VS Code.`);
+  // Never wrapped: a command split across lines cannot be copied.
   out.push(`From a terminal instead: let-me-explain done`);
 
   return `${out.join('\n')}\n`;

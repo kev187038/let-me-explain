@@ -9,19 +9,31 @@ const MAX_PROMPT_LINES = 25;
 // that ever stops being true.
 const INCLUDE_CODE = false;
 
-export function explanationForPrompt(view: PendingView): string {
-  const explained = view.lines.filter((l) => l.note !== undefined);
-  const shown = explained.slice(0, MAX_PROMPT_LINES);
-  const hidden = explained.length - shown.length;
+/**
+ * `prompt` — Claude Code owns the buttons, so the footer has to teach the
+ * phrase. `buttons` — this is a VS Code tooltip and the choice is on screen.
+ */
+export type Footer = 'prompt' | 'buttons';
+
+/** Shown where a note was expected and none arrived. */
+export const NO_NOTE = '— not explained —';
+
+export function explanationForPrompt(view: PendingView, footer: Footer = 'prompt'): string {
+  // A line is listed if it carries a note or a note was expected: a gap the
+  // learner can see beats a change they never see because we refused it.
+  // Context lines carried into an Edit are neither, and marking them as gaps
+  // would blame the agent for skipping what it was never asked for.
+  const listed = view.lines.filter((l) => l.note !== undefined || l.required);
+  const shown = listed.slice(0, MAX_PROMPT_LINES);
+  const hidden = listed.length - shown.length;
 
   const out = [`[let-me-explain] ${view.target}`];
   if (view.why) out.push(`Why: ${view.why}`);
   out.push('');
 
   for (const line of shown) {
-    out.push(
-      INCLUDE_CODE ? `  ${line.n} │ ${line.code}\n    └ ${line.note}` : `  ${line.n}  ${line.note}`,
-    );
+    const note = line.note ?? NO_NOTE;
+    out.push(INCLUDE_CODE ? `  ${line.n} │ ${line.code}\n    └ ${note}` : `  ${line.n}  ${note}`);
   }
 
   if (hidden > 0) {
@@ -30,7 +42,12 @@ export function explanationForPrompt(view: PendingView): string {
 
   out.push('');
   out.push(
-    `Reject and say you'll write it yourself, or reject with a question, to do either.`,
+    footer === 'buttons'
+      ? `✓ Allow · ✎ Let me try — type it yourself`
+      : // Claude Code owns the prompt's buttons, so "let me try" can only be
+        // reached by rejecting and saying so. Buried in a sentence, nobody
+        // found it.
+        `Approve · reject with "let me try" to type it yourself · reject with a question`,
   );
   return out.join('\n');
 }
@@ -38,6 +55,39 @@ export function explanationForPrompt(view: PendingView): string {
 // These strings are prompts, not error messages: they land in the agent's
 // context and are the only thing steering it back into the loop. Wording
 // changes here change behaviour.
+
+/**
+ * Sent back from `explain` so the learner gets a real menu.
+ *
+ * Claude Code's permission prompt takes exactly three fixed entries and a
+ * plugin cannot add a fourth — the hook may only allow, deny or ask. But
+ * `AskUserQuestion` is a built-in tool that renders a genuine multiple-choice
+ * list, and the agent can call it. We cannot, so we ask at the one moment it is
+ * relevant rather than spending session-start tokens on it.
+ *
+ * Deliberately no way to report the answer back: the hook stays the only gate,
+ * so a model that skips this simply lands on the ordinary prompt.
+ */
+export function chooseHowToProceed(target: string, tryTool: string): string {
+  const what = target === 'shell' ? 'this command' : target;
+  return [
+    `Recorded. Before the tool call, ask the learner how they want to handle it —`,
+    `call AskUserQuestion with:`,
+    `  question: "How do you want to handle ${what}?"`,
+    `  header:   "This change"`,
+    `  options:  "Yes, go ahead"`,
+    `            "Let me try — I'll type it myself"`,
+    `            "Explain more first"`,
+    ``,
+    `Then act on their answer:`,
+    `  Yes         → make the tool call as normal.`,
+    `  Let me try  → call \`${tryTool}\` with target "${target}", then make the tool call`,
+    `                anyway — it waits while they type and returns what they wrote.`,
+    `  Explain more→ answer their question, then ask again.`,
+    ``,
+    `No AskUserQuestion tool? Skip the menu and make the tool call as normal.`,
+  ].join('\n');
+}
 
 export function explainRequest(ticket: string, tool: string, lineCount: number): string {
   return [
@@ -83,6 +133,15 @@ export function stillTyping(target: string): string {
     `[let-me-explain] The learner is still typing ${target}.`,
     ``,
     `Say nothing and retry this exact tool call to keep waiting. Do not write the file.`,
+  ].join('\n');
+}
+
+export function learnerAlreadyWrote(target: string): string {
+  return [
+    `[let-me-explain] The learner already typed ${target} themselves — this is that same change.`,
+    ``,
+    `Do not write the file. Their version is on disk and is the one that counts.`,
+    `If you have feedback on it, say it in chat.`,
   ].join('\n');
 }
 

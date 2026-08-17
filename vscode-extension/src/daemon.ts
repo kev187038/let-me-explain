@@ -59,6 +59,7 @@ async function call(
       headers: {
         authorization: `Bearer ${at.token}`,
         'content-type': 'application/json',
+        'x-let-me-explain-client': 'buttons/1',
         ...init.headers,
       },
       signal: AbortSignal.timeout(3_000),
@@ -70,10 +71,58 @@ async function call(
   }
 }
 
+export interface Held {
+  ticket: string;
+  sessionId: string;
+  target: string;
+  why?: string;
+  /** The full line-by-line explanation, shown in the button's tooltip. */
+  explanation: string;
+}
+
+type Active = { tries?: Attempt[]; held?: Held[] };
+
 /** What the button polls for: the try waiting on the learner, if there is one. */
 export async function activeTry(env: NodeJS.ProcessEnv = process.env): Promise<Attempt | null> {
-  const body = (await call('/active', {}, env)) as { tries?: Attempt[] } | null;
-  return body?.tries?.[0] ?? null;
+  return ((await call('/active', {}, env)) as Active | null)?.tries?.[0] ?? null;
+}
+
+/**
+ * A change held for the learner's decision. This is the menu Claude Code's own
+ * prompt cannot give us: on this surface the daemon holds the tool call open,
+ * so the choice is ours to present.
+ */
+export async function pendingDecision(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Held | null> {
+  return ((await call('/active', {}, env)) as Active | null)?.held?.[0] ?? null;
+}
+
+async function decide(
+  held: Held,
+  decision: 'allow' | 'try',
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const body = (await call(
+    '/decision',
+    { method: 'POST', body: JSON.stringify({ ticket: held.ticket, decision }) },
+    env,
+  )) as { ok?: boolean } | null;
+  return body?.ok === true;
+}
+
+/** ✓ Allow — let the agent's change through. */
+export function allow(held: Held, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  return decide(held, 'allow', env);
+}
+
+/** ✎ Let me try — the agent stands down and the learner writes it. */
+export function letMeTry(held: Held, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  return decide(held, 'try', env);
+}
+
+export function fileName(target: string): string {
+  return target.split(/[\\/]/).pop() ?? target;
 }
 
 /** What the button does when clicked. */

@@ -88,9 +88,15 @@ Called by the MCP server on the agent's behalf, in one of two forms.
 }
 ```
 
-Returns `200 {"ok":true,"pending":true}`. Nothing is validated yet — the notes describe content
-the daemon has not seen. It is shelved under `(sessionId, target)` with a ~2 minute TTL, and
-checked when the matching tool call arrives.
+Returns `200 {"ok":true,"pending":true,"next":"…"}`. Nothing is validated yet — the notes describe
+content the daemon has not seen. It is shelved under `(sessionId, target)` with a ~2 minute TTL,
+and checked when the matching tool call arrives.
+
+`next` is the reply the MCP server hands straight back to the agent. It asks the agent to put a
+menu to the learner via `AskUserQuestion` — **Yes, go ahead** / **Let me try** / **Explain more
+first** — naming the real `let_me_try` tool, and ends with an instruction to skip the menu where
+that tool does not exist (`-p` mode has no interactive user). Nothing sends the answer back: the
+hook stays the only gate, so a skipped menu costs the choice, never the explanation.
 
 **After a denial** (the fallback) — identified by ticket:
 
@@ -102,7 +108,7 @@ checked when the matching tool call arrives.
 |---|---|---|
 | `200` | `{"ok":true,"ticket":"t_…"}` | accepted; the ticket moves to `awaiting_decision` |
 | `200` | `{"ok":true,"pending":true}` | shelved ahead of the change |
-| `400` | `{"ok":false,"error":"Missing notes for line(s): 2. …"}` | failed validation, or neither a ticket nor a target was given |
+| `400` | `{"ok":false,"error":"Note(s) on line(s) 1 exceed 25 words. …"}` | failed validation, or neither a ticket nor a target was given |
 | `404` | `{"ok":false,"error":"Unknown or expired ticket \"t_…\". Retry the tool call to get a fresh one."}` | no such ticket, or it aged out |
 
 The `error` strings are surfaced verbatim to the agent as a tool error, so it can self-correct.
@@ -147,7 +153,8 @@ change without breaking clients.
 
 ## `POST /decision`
 
-Resolve a blocked call. `{"ticket":"t_…","decision":"allow"|"write"}`.
+Resolve a blocked call. `{"ticket":"t_…","decision":"allow"|"try"}`. This is what both VS Code
+buttons and `let-me-explain allow` / `try` call.
 
 | Status | When |
 |---|---|
@@ -160,7 +167,45 @@ retry picks it up instead of parking.
 
 ---
 
+## `GET /active`
+
+What a status bar polls, in one request: both things that can be waiting on you.
+
+```json
+{
+  "tries": [{ "sessionId": "…", "target": "src/auth.ts", "path": "/repo/src/auth.ts" }],
+  "held":  [{ "ticket": "t_…", "sessionId": "…", "target": "src/auth.ts",
+              "why": "…", "explanation": "why: …\n  1  names the …" }]
+}
+```
+
+`held` carries the rendered explanation so the button's tooltip needs no second request. It lists
+only tickets with a request genuinely parked on them — under `surface: prompt` tickets sit in
+`awaiting_decision` so a retry re-asks, but nobody is waiting, and offering a button there would
+answer a question that was never put to us.
+
+**Send `x-let-me-explain-client: buttons/1`** if you can render the choice. Only a poll carrying
+that header marks a decider as present; without one the `/hook` route refuses to hold a change open
+and falls back to Claude Code's prompt. Requests without it are still served — they just do not
+count. This exists because a poll proves someone is watching, not that they can act.
+
+---
+
 ## `POST /try` · `POST /done`
+
+`POST /try` has two entry points, because the learner can choose to type a change either before or
+after the agent attempts it:
+
+| When | State | Response |
+|---|---|---|
+| After a denial or a held prompt — a ticket exists | code and notes both known | `{"ok":true,"status":"open"}` — tutorial written, editor opened |
+| Straight from the `AskUserQuestion` menu — only a pre-explanation exists | notes known, **code not yet** | `{"ok":true,"status":"armed"}` — the choice is remembered |
+
+`armed` is the normal path now. A pre-explanation carries notes and a `why` but no code, and the
+tutorial needs the code the agent intended to write — that only reaches the daemon as `toolInput`
+on the tool call. So the choice is held, and `POST /hook` writes the tutorial and parks the moment
+the call arrives. An armed choice expires with the ticket TTL so it cannot ambush an unrelated
+later change to the same file.
 
 `/try` takes `{sessionId, target, cwd, termProgram?, claudeSsePort?, editor?}`. It writes the
 tutorial, opens the learner's editor, and **returns immediately** with `{ok, status:"open"}`.

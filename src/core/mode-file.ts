@@ -16,6 +16,10 @@ export interface ModeFile {
   sessions: Record<string, Partial<Settings>>;
 }
 
+// `prompt` by default: the explanation lands inline where the learner already
+// is, and nothing can hold a tool call open. This was briefly `window`, on the
+// grounds that only there could "let me try" be a real choice — the terminal
+// menu removes that reason, so the default goes back.
 export const DEFAULTS: Settings = { mode: 'on', surface: 'prompt' };
 
 function asMode(value: unknown): Mode | null {

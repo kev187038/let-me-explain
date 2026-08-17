@@ -14,13 +14,19 @@ export interface Stats {
   denied: number;
   denyRate: number | null;
   mismatched: number;
-  /** Explanations the daemon refused: wrong line coverage, too wordy. */
+  /** Explanations the daemon refused: no notes at all, or too wordy. */
   rejected: number;
   topRejection: { reason: string; count: number } | null;
   /** What the learner chose. */
   approved: number;
   declined: number;
   medianWaitMs: number | null;
+  /**
+   * Share of changed lines that arrived with a note. Coverage is shown to the
+   * learner rather than enforced, so this is how under-explaining stays
+   * visible instead of silent. `null` until something has been explained.
+   */
+  coverage: number | null;
 }
 
 export function parseLogLines(text: string): LogLine[] {
@@ -59,6 +65,8 @@ export function summarise(lines: LogLine[]): Stats {
   let rejected = 0;
   let approved = 0;
   let declined = 0;
+  let linesNeeded = 0;
+  let linesMissing = 0;
   const reasons = new Map<string, number>();
   const awaitingAt = new Map<string, number>();
   const waits: number[] = [];
@@ -80,6 +88,10 @@ export function summarise(lines: LogLine[]): Stats {
         reasons.set(key, (reasons.get(key) ?? 0) + 1);
         break;
       }
+      case 'explain.coverage':
+        if (typeof line.needed === 'number') linesNeeded += line.needed;
+        if (typeof line.missing === 'number') linesMissing += line.missing;
+        break;
       case 'decision.awaiting':
         if (line.ticket && typeof line.at === 'number') awaitingAt.set(line.ticket, line.at);
         break;
@@ -117,5 +129,6 @@ export function summarise(lines: LogLine[]): Stats {
     approved,
     declined,
     medianWaitMs: median(waits),
+    coverage: linesNeeded === 0 ? null : (linesNeeded - linesMissing) / linesNeeded,
   };
 }

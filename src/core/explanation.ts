@@ -1,4 +1,4 @@
-import { LIMITS, type ExplainInput } from '../contracts/index.js';
+import { LIMITS, type ExplainInput, type LineNote } from '../contracts/index.js';
 import { requiredLineNumbers, type Explainable } from './lines.js';
 
 export type Validation = { ok: true } | { ok: false; error: string };
@@ -12,39 +12,76 @@ function list(ns: number[]): string {
   return ns.length > 12 ? `${head}, … (${ns.length} total)` : head;
 }
 
-// Returned verbatim to the agent as a tool error when it fails, so every
-// message here has to say what to do next, not just what went wrong.
+function nonBlankLines(explainable: Explainable): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < explainable.lines.length; i++) {
+    if ((explainable.lines[i] ?? '').trim().length > 0) out.push(i + 1);
+  }
+  return out;
+}
+
+/**
+ * Notes matched to the lines they describe. This never fails.
+ *
+ * The agent's numbering varies — sometimes 1-based within the change, sometimes
+ * the line's position in the file — and three separate attempts to police that
+ * only produced three new ways to reject a perfectly good explanation. So the
+ * numbering is a hint: used when it fits, and otherwise the notes are laid
+ * against the lines in the order they were given.
+ */
+export function alignNotes(explainable: Explainable, notes: LineNote[]): LineNote[] {
+  const required = requiredLineNumbers(explainable);
+  const all = nonBlankLines(explainable);
+  const known = new Set(all);
+  const unique = new Set(notes.map((l) => l.n)).size === notes.length;
+
+  // Numbering that points at real lines is taken at its word even when it
+  // covers only part of the change — the alternative packs a partial
+  // explanation onto the wrong lines, which is worse than an honest gap.
+  if (unique && notes.every((l) => known.has(l.n))) {
+    return [...notes].sort((a, b) => a.n - b.n);
+  }
+
+  // Explaining every line, context included, is generosity rather than an
+  // error — so a count matching the whole change pairs against all of it.
+  const targets = notes.length === all.length ? all : required;
+  return targets
+    .slice(0, notes.length)
+    .map((n, i) => ({ n, note: notes[i]?.note ?? '' }))
+    .filter((l) => l.note.length > 0);
+}
+
+/** Lines the learner will see with no note against them. */
+export function unexplained(explainable: Explainable, notes: LineNote[]): number[] {
+  const covered = new Set(alignNotes(explainable, notes).map((l) => l.n));
+  return requiredLineNumbers(explainable).filter((n) => !covered.has(n));
+}
+
+// Returned verbatim to the agent as a tool error, so anything that fails here
+// has to be worth a round trip. Coverage is not: a missing note is shown to the
+// learner as a gap instead, which never blocks the change.
 export function validateExplanation(
   explainable: Explainable,
   input: Pick<ExplainInput, 'lines' | 'why'>,
 ): Validation {
-  const required = requiredLineNumbers(explainable.lines);
-  const seen = new Map<number, string>();
-
-  for (const { n, note } of input.lines) {
-    if (n > explainable.lines.length) {
-      return {
-        ok: false,
-        error: `Line ${n} does not exist — this change has ${explainable.lines.length} line(s). Number lines from 1 within the new content only.`,
-      };
-    }
-    if (seen.has(n)) return { ok: false, error: `Line ${n} was explained twice. Send one note per line.` };
-    seen.set(n, note);
-  }
-
-  const missing = required.filter((n) => !seen.has(n));
-  if (missing.length > 0) {
+  if (input.lines.length === 0) {
     return {
       ok: false,
-      error: `Missing notes for line(s): ${list(missing)}. Every non-blank line needs exactly one note.`,
+      error: 'Send at least one note — this is the explanation the learner reads.',
     };
   }
 
-  const tooLong = [...seen.entries()].filter(([, note]) => words(note) > LIMITS.maxNoteWords);
+  // A command packs far more meaning per line than a line of code, and naming
+  // four flags does not fit in the tighter budget.
+  const maxWords =
+    explainable.target === 'shell' ? LIMITS.maxShellNoteWords : LIMITS.maxNoteWords;
+
+  const aligned = alignNotes(explainable, input.lines);
+  const tooLong = aligned.filter((l) => words(l.note) > maxWords);
   if (tooLong.length > 0) {
     return {
       ok: false,
-      error: `Note(s) on line(s) ${list(tooLong.map(([n]) => n))} exceed ${LIMITS.maxNoteWords} words. Say the one thing that line does, plainly.`,
+      error: `Note(s) on line(s) ${list(tooLong.map((l) => l.n))} exceed ${maxWords} words. Say the one thing that line does, plainly.`,
     };
   }
 

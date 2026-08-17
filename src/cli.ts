@@ -181,6 +181,9 @@ async function stats(): Promise<void> {
       `  rejected           ${s.rejected}${top ? `   most common: ${top.reason} (${top.count})` : ''}`,
     );
   }
+  if (s.coverage !== null) {
+    out.push(`  lines explained    ${Math.round(s.coverage * 100)}%   <- coverage`);
+  }
   out.push(`  decisions          ${s.approved} approved · ${s.declined} rejected`);
   if (s.medianWaitMs !== null) {
     out.push(`  median wait        ${(s.medianWaitMs / 1000).toFixed(1)}s`);
@@ -229,7 +232,7 @@ async function setSurface(surface: string | undefined, sessionId?: string): Prom
   process.stdout.write(
     surface === 'prompt'
       ? "surface: prompt — explanations appear in Claude Code's approval prompt\n"
-      : 'surface: window — changes are held; decide with `pending` then `allow`/`write`\n',
+      : 'surface: window — changes are held for the VS Code buttons, or `pending` then `allow`/`try`\n',
   );
 }
 

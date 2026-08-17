@@ -235,12 +235,102 @@ text saying exactly which lines are missing.
 
 ---
 
-## Coverage is validated at the tool boundary
+## Coverage is shown, not enforced — reversing an earlier decision
 
-**Rejected:** asking for per-line explanations in the instructions and trusting the model.
+**Superseded:** *"Coverage is validated at the tool boundary."* That decision rejected trusting
+the model, on the grounds that a prompt is a request and validation is a guarantee. The mechanism
+was right. The cost was wrong.
 
-**Why:** a prompt is a request; validation is a guarantee. Feature 1 says "every line, explained"
-— that is only true if something structurally prevents proceeding without it.
+**What happened:** the validator refused real explanations three separate times, each for a
+different reason, and each fix revealed the next one — notes for unchanged context lines, then
+numbering by file position instead of position within the change, then more notes than the
+minimum. Three rounds is a pattern rather than a run of bad luck: a strict validator aimed at a
+model whose output *shape* varies will keep finding new ways to say no, and each no costs a
+wasted round trip and an error the learner has to interpret.
+
+**Now:** the tool accepts whatever notes arrive and pairs them to lines — by number when that
+fits, in order otherwise. A line with no note renders as `— not explained —`. The learner sees
+the change with a visible hole in it instead of not seeing the change at all.
+
+**What is still enforced,** because it is cheap for the agent to fix and rare: an over-length
+note, an over-length `why`, and calling the tool with no notes whatsoever.
+
+**Coverage did not stop mattering — it stopped being a gate.** `explain.coverage` is logged at
+the point the notes meet the real change, and `let-me-explain stats` reports the share of changed
+lines that arrived explained. The instructions still ask for every changed line. The general
+rule: enforce what is cheap to satisfy and unambiguous to check; measure what is neither.
+
+---
+
+## "Let me try" is offered through `AskUserQuestion`, not a fourth button
+
+**Established, not assumed:** Claude Code's permission prompt cannot be extended. A `PreToolUse`
+hook may return only `permissionDecision` (`allow` / `deny` / `escalate`),
+`permissionDecisionReason`, `additionalContext` and `updatedInput`, plus `systemMessage` and
+`continue`. The hooks reference states outright that hooks cannot define their own options, and
+the Agent SDK's `canUseTool` is likewise binary (`allow` / `deny`). Sources checked 2026-08-17:
+`code.claude.com/docs/en/hooks.md`, `.../agent-sdk/user-input`, `.../plugins-reference.md`.
+
+**So the menu comes from elsewhere.** `AskUserQuestion` is a built-in Claude Code tool that renders
+a real multiple-choice list. A plugin cannot call it — but the agent can, and we can ask the agent
+to. The request rides in the `explain` tool's reply (`chooseHowToProceed` in
+`src/daemon/prompts.ts`, returned as `next` from `POST /explain`) rather than in the session-start
+instructions: just-in-time context arrives adjacent to the action and costs nothing in sessions
+where no edit happens.
+
+**Rejected: a tool that records the learner's answer.** It would collapse "Yes" to a single
+keystroke by letting the hook allow silently. It would also let a model that skipped the menu call
+it anyway and approve its own change, and the learner would never see the edit. The menu is
+therefore purely additive — **nothing here reports a decision, so nothing here can fake one.** If
+the model ignores the menu, the hook still asks, which is exactly the old behaviour. The price is
+one extra keypress on the "Yes" path; "Let me try" costs nothing extra, and that is the path the
+feature exists for.
+
+**It degrades where the tool is absent.** `AskUserQuestion` does not exist in `-p` (print) mode —
+measured, not assumed — so the reply ends with "No AskUserQuestion tool? Skip the menu and make the
+tool call as normal." Without that line a headless agent would chase a tool it does not have.
+
+**Compliance is measured, not assumed.** `test/live/journey.live.test.ts` asserts the menu reaches
+the model. Whether the model *acts* on it is a model property that drifts silently, and can only be
+seen in a real interactive session — the same reason deny-rate is tracked.
+
+---
+
+## A watcher has to prove it can show the choice
+
+**Rejected:** treating any authenticated `GET /active` poll as evidence that someone can decide.
+
+**Why:** that is what shipped first, and it caused a silent hang. On `surface: window` the daemon
+holds the tool call open; the pre-buttons VS Code extension polled `/active` for tries alone, which
+was enough to convince the daemon a decider existed. The change was held with nothing on screen and
+no way to answer, and the learner just saw Claude Code stop. A poll proves someone is *watching*;
+it does not prove they can *act*. So `/active` now counts a watcher only when the request carries
+`x-let-me-explain-client: buttons/1`, and the hook falls back to Claude Code's prompt otherwise —
+saying why, because a silent fallback is as confusing as the hang it replaces.
+
+---
+
+## The default surface, and why it moved twice
+
+**Now `prompt`, after a round trip through `window`.** The flip to `window` was made for one
+reason: let-me-try was unreachable on `prompt`, and holding the tool call open was the only way to
+own the choice. The `AskUserQuestion` menu removes that reason, so the flip is undone rather than
+left standing — the explanation goes back inline where the learner already is, and no tool call is
+ever held open by default, which means nothing can hang.
+
+`window` remains opt-in for anyone who would rather click in the editor than answer in the
+terminal. There the VS Code status bar offers **✓ Allow** and **✎ Let me try**, and the
+explanation moves to the button's tooltip.
+
+**The lesson worth keeping:** the first fix treated a UI limitation as a reason to move the whole
+decision out of the terminal. The limitation was real; the conclusion was too broad. Checking what
+the harness actually offered — rather than assuming the prompt was the only interactive surface —
+produced a smaller change that did not cost the inline explanation.
+
+**A held ticket is not the same as a pending one.** On `prompt`, tickets sit in
+`awaiting_decision` on purpose so a retry re-asks instead of demanding a fresh explanation — but
+nobody is parked on them. `/active` therefore reports only tickets with a live waiter
+(`store.isHeld`), or a button click would answer a question that was never put to us.
 
 ---
 

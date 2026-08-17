@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -14,6 +14,16 @@ import { createTryStore } from '../src/daemon/try.js';
 import { createToolNames } from '../src/daemon/tool-name.js';
 import { isOwnMachinery } from '../src/hook/policy.js';
 import { fsIo } from '../src/io/fs-io.js';
+
+// The default surface is now `window`, where /hook blocks until a human
+// decides. These suites are about what happens around that decision, so they
+// pin the prompt surface, where the hook answers straight away.
+async function promptMode(e: Env) {
+  const store = await createModeStore(fsIo, modePath(e));
+  await store.setSurface('prompt');
+  return store;
+}
+
 
 
 const TOKEN = 'test-token';
@@ -44,7 +54,7 @@ beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'lme-kill-'));
   env = { home, xdgStateHome: join(home, 'state'), xdgRuntimeDir: join(home, 'run') };
   store = createTicketStore();
-  mode = await createModeStore(fsIo, modePath(env));
+  mode = await promptMode(env);
   app = createApp({
     store,
     tries: createTryStore(env, fsIo, () => {}),
@@ -81,13 +91,13 @@ describe('mode', () => {
 
   it('survives a restart by reading back what it wrote', async () => {
     await mode.set('off');
-    const reloaded = await createModeStore(fsIo, modePath(env));
+    const reloaded = await promptMode(env);
     expect(reloaded.get()).toBe('off');
   });
 
   it('ignores a corrupt mode file rather than refusing to start', async () => {
     await fsIo.writeFileAtomic(modePath(env), 'not json {');
-    const reloaded = await createModeStore(fsIo, modePath(env));
+    const reloaded = await promptMode(env);
     expect(reloaded.get()).toBe('on');
   });
 });
@@ -101,6 +111,30 @@ describe('never-intercept list', () => {
   it('lets our own MCP tools through, so explain() is not an infinite regress', () => {
     expect(isOwnMachinery('mcp__plugin_let-me-explain_lme__explain', {})).toBe(true);
     expect(isOwnMachinery('mcp__plugin_let-me-explain_lme__answer', {})).toBe(true);
+    expect(isOwnMachinery('mcp__plugin_let-me-explain_lme__let_me_try', {})).toBe(true);
+  });
+
+  // Returning `allow` from the hook is also what pre-approves our own tools.
+  // A tool the matcher does not cover never reaches the shim, so it falls
+  // through to Claude Code's permission prompt — which nobody can answer in a
+  // headless session. That is exactly how let_me_try failed in a real session:
+  // the agent called it correctly and was refused permission.
+  it('the hook matcher covers every tool the shim exempts', async () => {
+    const hooks = JSON.parse(
+      await readFile(new URL('../hooks/hooks.json', import.meta.url), 'utf8'),
+    ) as { hooks: { PreToolUse: { matcher: string }[] } };
+    const matcher = new RegExp(hooks.hooks.PreToolUse[0]?.matcher ?? '');
+
+    for (const tool of [
+      'mcp__plugin_let-me-explain_lme__explain',
+      'mcp__plugin_let-me-explain_lme__let_me_try',
+      'Edit',
+      'Write',
+      'MultiEdit',
+      'Bash',
+    ]) {
+      expect(matcher.test(tool), `${tool} never reaches the hook`).toBe(true);
+    }
   });
 
   it('exempts our CLI invoked by path, so the switch works when installed', () => {

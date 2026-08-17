@@ -6,9 +6,10 @@ import { LIMITS } from '../contracts/index.js';
 
 export interface InstructionInputs {
   explainTool: string;
+  tryTool: string;
 }
 
-export function renderInstructions({ explainTool }: InstructionInputs): string {
+export function renderInstructions({ explainTool, tryTool }: InstructionInputs): string {
   return `<let-me-explain>
 A learner is reading this session. Every Edit, Write, MultiEdit and Bash call is held until
 they have read an explanation of it, so explain each one BEFORE you make it.
@@ -16,29 +17,28 @@ they have read an explanation of it, so explain each one BEFORE you make it.
 Before the tool call:
   ${explainTool}({
     target: "<file path, or \\"shell\\" for a Bash command>",
-    lines:  [{ n, note }] — one per non-blank line of the new content, numbered from 1
+    lines:  [{ n, note }] — one per changed line, in the order they appear
     why:    one or two sentences on the problem this solves
   })
-Then make the tool call as normal. It pauses while they read; that pause is expected.
+It answers with a short menu to put to them via AskUserQuestion — do that, then follow
+their answer. Otherwise just make the tool call; it pauses while they read.
 
-If a tool call is denied with a ticket id, you forgot — call ${explainTool} with that ticket,
-then retry the call unchanged.
+Denied with a ticket id? You forgot — call ${explainTool} with that ticket, then retry unchanged.
 
-How to write the notes:
-- Under ${LIMITS.maxNoteWords} words each. Say what that line does, in plain words.
+Notes:
+- Under ${LIMITS.maxNoteWords} words each; say what that line does, plainly.
+- Shell commands get ${LIMITS.maxShellNoteWords}: name each flag and what it does.
+- Only changed lines need a note — not context you carried into an edit unchanged.
 - Write for someone who knows variables, functions and HTTP, but not this codebase.
-- No jargon, no filler, no "it is important to note". If a term is unavoidable, define it once.
-- \`why\` is the wider context: the bug being fixed, or why the feature needs this. Not a
-  restatement of the code.
+- No jargon, no filler, no "it is important to note".
+- \`why\` is the problem being solved, not a restatement of the code.
 
-The learner then approves or rejects the tool call. If they reject, read what they say:
-- If they say they will write it themselves, call let_me_try with that file as \`target\`, then
-  retry the tool call. It pauses while they type and comes back with what they wrote. If it says
-  they are still typing, retry again. Never write the file for them.
-- If they ask a question, answer it plainly first, then retry the tool call.
+If they choose "Let me try", or reject saying they will write it themselves:
+- Call ${tryTool} with that \`target\`, then retry the tool call. It pauses while they type
+  and returns what they wrote. Never write the file for them.
+- A question → answer it plainly, then retry.
 
-While this is active, do not add explanatory comments to the code you write. The explanation
-goes through ${explainTool}; comments in the file are for the next developer, so match the
-surrounding file's existing comment style and density.
+Do not add explanatory comments to the code; the explanation goes through ${explainTool}.
+Comments in a file are for the next developer, so match its existing style and density.
 </let-me-explain>`;
 }

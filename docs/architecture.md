@@ -17,7 +17,7 @@ Claude Code ──spawns──► MCP server ──POST /explain────►�
                                     allow / deny        │
                                                         │
                           you ──── CLI ─────────────────┘
-                                (pending / allow / write)
+                                (pending / allow / try)
 ```
 
 ## Why three processes
@@ -102,13 +102,26 @@ Where the explanation appears, and who collects the answer, is one setting.
 
 | `surface` | The hook returns | Who shows it | Who decides |
 |---|---|---|---|
-| `prompt` *(default)* | `ask` + the explanation | Claude Code's own approval prompt — terminal or VS Code extension | You, with a keypress |
-| `window` | blocks until a decision | nothing automatically | `let-me-explain pending`, then `allow` / `write` |
+| `prompt` *(default)* | `ask` + the explanation | Claude Code's own approval prompt | You, with a keypress — after the `AskUserQuestion` menu |
+| `window` | blocks until a decision | the VS Code status bar, from `/active` | **✓ Allow** / **✎ Let me try**, or `pending` then `allow` / `try` |
 
-`prompt` is what a learner uses: the explanation lands inline where you already are, and there is
-no second window, no blocking, and no timeout. `window` keeps the held-request machinery for
-inspecting detail, for scripting, and as the foundation for a future VS Code panel (which is what
-feature 2's per-line selection will need).
+`prompt` is the default. The explanation lands inline where you already are, no tool call is held
+open, and the **Let me try** option arrives separately as an `AskUserQuestion` menu the agent is
+asked to render — so the surface no longer has to carry the choice.
+
+`window` holds the tool call open instead, which is what makes the VS Code buttons possible. It
+costs a blocked request and a timeout, and it only works while something can answer.
+
+**A held ticket is not the same as a pending one.** Under `prompt`, tickets stay in
+`awaiting_decision` on purpose so a retry re-asks rather than demanding a fresh explanation — but
+no request is parked on them. `/active` reports only tickets with a live waiter (`store.isHeld`),
+or a button click would answer a question that was never put to us.
+
+**And a poll is not the same as a decider.** `window` blocks, so it needs something that can
+actually show the choice. A client counts only if it sends `x-let-me-explain-client: buttons/1`;
+otherwise the hook falls back to `ask` and says why. An earlier version trusted any authenticated
+`/active` poll, and a stale extension that polled for tries alone was enough to hold a change open
+with nothing on screen.
 
 Everything before the final step is identical between them.
 
@@ -124,7 +137,7 @@ the normal sequence costs no wasted call:
 3. It fits → the daemon has an explanation for a change that is about to happen.
 4. Under `surface: prompt` the hook returns **`ask`** carrying that explanation, and Claude Code
    shows you its approval prompt. Under `surface: window` it **holds the request open** instead,
-   and you answer with `let-me-explain allow` / `write`.
+   and you answer with the VS Code buttons, or `let-me-explain allow` / `try`.
 
 A pre-explanation is a *claim* about content the daemon has not seen yet, so step 2's validation
 is the safety story: it binds only if it covers the real change. Pre-explanations carry a short
@@ -201,8 +214,11 @@ Everything fails open. A broken plugin degrades to plain Claude Code, never to a
 | Nobody answers a blocked call | Auto-allow after 5 minutes, logged |
 | Log write fails | Swallowed — losing a log line must not cost you an edit |
 
-The one thing that is *not* fail-open is `explain()` validation: a bad explanation is rejected
-back to the agent so it corrects itself. That is a self-repair loop, not a failure.
+The one thing that is *not* fail-open is `explain()` validation: an over-length note, or the tool
+called with no notes at all, is rejected back to the agent so it corrects itself. That is a
+self-repair loop, not a failure. Missing coverage used to be rejected the same way and no longer
+is — three rounds of false refusals showed the round trip cost more than the guarantee was worth.
+See [decisions.md](decisions.md).
 
 ## Related
 

@@ -137,8 +137,8 @@ describe('ticket store', () => {
         state: 'awaiting_decision',
         target: '/a.ts',
         lines: [
-          { n: 1, code: 'one', note: 'first' },
-          { n: 2, code: 'two', note: 'second' },
+          { n: 1, code: 'one', note: 'first', required: true },
+          { n: 2, code: 'two', note: 'second', required: true },
         ],
         why: 'because',
       },

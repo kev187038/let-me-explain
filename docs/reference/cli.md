@@ -10,9 +10,10 @@ Implemented in `src/cli.ts`. Installed as `let-me-explain`; runnable unbuilt wit
 `npm run dev -- <command>`, or from the plugin copy with
 `node ~/.claude/plugins/cache/let-me-explain/let-me-explain/<version>/dist/cli.js`.
 
-With the default `surface: prompt`, Claude Code collects your decision and the commands below are
-for inspection and control. Under `surface: window` the daemon holds each change instead, and
-`pending` / `allow` / `write` become how you answer.
+With the default `surface: prompt`, Claude Code collects your decision — after the
+`AskUserQuestion` menu the agent is asked to show — and the commands below are for inspection and
+control. Under `surface: window` the daemon holds each change instead, and `pending` / `allow` /
+`try` become how you answer, alongside the VS Code buttons that call the same endpoints.
 
 ```
 let-me-explain
@@ -159,11 +160,16 @@ $ let-me-explain surface prompt
 surface: prompt — explanations appear in Claude Code's approval prompt
 
 $ let-me-explain surface window
-surface: window — changes are held; decide with `pending` then `allow`/`write`
+surface: window — changes are held for the VS Code buttons, or `pending` then `allow`/`try`
 ```
 
-`prompt` is the default. `window` is what `pending` / `allow` / `write` below operate on — with
-`prompt` set, Claude Code has already collected your answer and there is nothing pending.
+`prompt` is the default. "Let me try" is reachable there through the `AskUserQuestion` menu, so
+the surface no longer has to carry the choice — and with `prompt` set, Claude Code has already
+collected your answer, so there is nothing pending.
+
+`window` is what `pending` / `allow` / `try` operate on. It holds each tool call open, which is
+what lets the VS Code buttons decide — and it only holds while a client that can show the choice
+is polling `/active`. Without one the hook falls back to the prompt and says so.
 
 ---
 
@@ -176,6 +182,7 @@ $ let-me-explain stats
   intercepted        1
   explained upfront  1   (100%)
   needed a denial    0   (0%)   <- deny-rate
+  lines explained    92%   <- coverage
   decisions          1 approved · 0 rejected
 ```
 
@@ -184,8 +191,14 @@ explaining first, so it measures whether the injected instructions are still lan
 before the instruction layer existed. A rising deny-rate means the instructions have drifted —
 and instructions drift silently, because nothing crashes when a model stops following them.
 
+**Coverage is the second number to watch.** Since explanations are no longer refused for missing
+lines, this is what makes under-explaining visible: it is the share of changed lines that arrived
+with a note. A falling coverage figure means the model is narrating less of each change even
+though nothing is failing.
+
 `mismatched` appears when a pre-explanation failed to match the change that arrived, and
-`rejected` when an explanation failed validation, with the most common reason.
+`rejected` when an explanation failed validation — now only an over-length note or no notes at
+all — with the most common reason.
 
 Needs no daemon — it reads the logs directly.
 
@@ -223,6 +236,6 @@ Full table: [root README](../../README.md#environment-variables).
 ## Related
 
 - [reference/protocol.md](protocol.md) — the routes these commands call
-- [features/04-let-me-try.md](../features/04-let-me-try.md) — `pending` / `allow` / `write` in context
+- [features/04-let-me-try.md](../features/04-let-me-try.md) — `pending` / `allow` / `try` in context
 - [features/07-toggle.md](../features/07-toggle.md) — `on` / `off` in context
 - [development.md](../development.md) — driving the daemon with `curl` instead

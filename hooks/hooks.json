@@ -16,7 +16,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|Bash|mcp__.*__explain",
+        "matcher": "Edit|Write|MultiEdit|Bash|mcp__.*__(explain|let_me_try)",
         "hooks": [
           {
             "type": "command",

@@ -108,7 +108,12 @@ export interface PendingView {
   toolName: string;
   state: TicketState;
   target: string;
-  lines: { n: number; code: string; note?: string }[];
+  /**
+   * `required` marks a line a note was expected for. Blank lines and context
+   * carried unchanged into an Edit are not, so a missing note there is not a
+   * gap and must not be drawn as one.
+   */
+  lines: { n: number; code: string; note?: string; required?: boolean }[];
   why?: string;
 }
 
@@ -123,6 +128,8 @@ export interface PreToolUseOutput {
 
 export const LIMITS = {
   maxNoteWords: 25,
+  // A shell line is one note for a whole command, flags included.
+  maxShellNoteWords: 45,
   maxWhyWords: 90,
   // A ticket that has sat unresolved this long can no longer authorise an
   // edit — the code it was minted for has probably moved on.

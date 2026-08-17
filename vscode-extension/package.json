@@ -1,8 +1,8 @@
 {
   "name": "let-me-explain",
   "displayName": "let-me-explain",
-  "description": "A status-bar button to hand your work back to Claude when you have finished typing.",
-  "version": "0.1.0",
+  "description": "Status-bar buttons for let-me-explain: allow a change, take it over and write it yourself, or hand your work back to Claude.",
+  "version": "0.2.1",
   "publisher": "gabi",
   "license": "MIT",
   "engines": {
@@ -20,7 +20,17 @@
     "commands": [
       {
         "command": "letMeExplain.done",
-        "title": "let-me-explain: I'm done typing",
+        "title": "I'm done typing",
+        "category": "let-me-explain"
+      },
+      {
+        "command": "letMeExplain.allow",
+        "title": "Allow this change",
+        "category": "let-me-explain"
+      },
+      {
+        "command": "letMeExplain.letMeTry",
+        "title": "Let me try \u2014 write it myself",
         "category": "let-me-explain"
       }
     ]

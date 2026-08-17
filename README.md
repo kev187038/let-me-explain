@@ -104,16 +104,21 @@ $ code --list-extensions | grep let-me-explain
 gabi.let-me-explain
 ```
 
-While a try is running you get:
+The extension supplies the **✓ I'm done** button, which is the part that genuinely needs an
+editor. While you are typing your own version it shows:
 
 ```
  …  TS  ⚡ Prettier   ✓ I'm done — auth.ts
                         ↑ click, and Claude reviews your work
 ```
 
-It is hidden the rest of the time. Without it, the tutorial's checkbox and `let-me-explain done`
-both still work — see [Turning it off](#turning-it-off) for removing the plugin entirely, or
-`code --uninstall-extension gabi.let-me-explain` for just this.
+The row is hidden the rest of the time. Without the extension the same job is `let-me-explain
+done` in a terminal, or ticking the checkbox at the bottom of the tutorial.
+
+On the optional `surface window` the status bar also carries the decision itself — **✓ Allow** and
+**✎ Let me try**, with the explanation in the hover tooltip. See
+[Turning it off](#turning-it-off) to remove the plugin, or
+`code --uninstall-extension gabi.let-me-explain` for just the extension.
 
 ## Try it in 60 seconds
 
@@ -130,9 +135,22 @@ start teach the agent to explain first, so the explanation arrives with the appr
   Do you want to proceed?
 ```
 
-Answer with a keypress. Choosing *"No, and tell Claude what to do differently"* opens a text
-field, and what you type goes back to the agent — that is how both **"I'll write this myself"**
-and **"why did you use `sign` here?"** work.
+Before that prompt you get the choice itself, as a real menu:
+
+```
+  How do you want to handle src/auth.ts?
+  ❯ 1. Yes, go ahead
+    2. Let me try — I'll type it myself
+    3. Explain more first
+```
+
+Pick **2** and Claude stands down: a tutorial opens beside the file with the explanation, you type
+it yourself, and you press **✓ I'm done** when you are finished.
+
+Claude Code's own permission prompt has three fixed entries and no plugin can add a fourth — this
+menu is the built-in `AskUserQuestion` tool, which the agent is asked to call right after it
+explains. If it skips the menu you simply get the approval prompt, and choosing *"No, and tell
+Claude what to do differently"* still lets you type **"let me try"** by hand.
 
 If the agent forgets to explain first, its tool call is refused and the refusal tells it what to
 do — then it explains and retries:
@@ -199,13 +217,14 @@ every failure instead of only when you need it. See [docs/features/07-toggle.md]
 | `let-me-explain try <ticket>` | Take it over and type it yourself |
 | `let-me-explain done` | Tell Claude you have finished typing |
 | `let-me-explain clean [--list]` | Remove tutorial files (or just list them) |
-| `let-me-explain stats` | How often the agent explains before being asked |
-| `let-me-explain surface prompt\|window` | Explain inline in Claude Code, or hold changes for the CLI |
+| `let-me-explain stats` | How often the agent explains, and how much of each change it covered |
+| `let-me-explain surface window\|prompt` | Hold changes for the buttons/CLI, or explain inline in Claude Code |
 | `--session <id>` | Scope settings to one session instead of globally |
 
-`surface prompt` is the default and what a learner wants. `surface window` holds each change
-instead, so you inspect it with `pending` and answer with `allow` / `try` — useful for
-scripting, and the groundwork for a future editor panel.
+`surface prompt` is the default: the explanation appears inline in Claude Code, and the **Let me
+try** option comes from the menu described above. `surface window` instead holds each change for
+the VS Code buttons — or for `pending` then `allow` / `try` — which suits you if you would rather
+click in the editor than answer in the terminal.
 
 Full reference: [docs/reference/cli.md](docs/reference/cli.md).
 

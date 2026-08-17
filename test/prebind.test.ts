@@ -14,8 +14,19 @@ import { createTryStore } from '../src/daemon/try.js';
 import { createToolNames } from '../src/daemon/tool-name.js';
 import { fsIo } from '../src/io/fs-io.js';
 
+// The default surface is now `window`, where /hook blocks until a human
+// decides. These suites are about what happens around that decision, so they
+// pin the prompt surface, where the hook answers straight away.
+async function promptMode(e: Env) {
+  const store = await createModeStore(fsIo, modePath(e));
+  await store.setSurface('prompt');
+  return store;
+}
+
+
 const TOKEN = 'test-token';
 const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+const WATCHING = { ...AUTH, 'x-let-me-explain-client': 'buttons/1' };
 const SESSION = 's1';
 
 const EDIT = {
@@ -50,11 +61,14 @@ const preExplanation = {
   why: 'the counter started at zero and skipped the first item',
 };
 
+// Holding a change open only happens when something is watching, so these
+// suites poll /active once the way the VS Code status bar does. Without it the
+// hook falls back to Claude Code's prompt rather than parking forever.
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'lme-pre-'));
   env = { home, xdgStateHome: join(home, 'state') };
   store = createTicketStore();
-  const mode = await createModeStore(fsIo, modePath(env));
+  const mode = await promptMode(env);
   await mode.setSurface('window');
   app = createApp({
     store,
@@ -66,6 +80,7 @@ beforeEach(async () => {
     token: TOKEN,
     decisionTimeoutMs: 150,
   });
+  await app.request('/active', { headers: WATCHING });
 });
 
 afterEach(async () => {
@@ -77,14 +92,19 @@ describe('explaining before the change', () => {
   it('blocks straight away, with no denial at all', async () => {
     const shelved = await post('/explain', preExplanation);
     expect(shelved.status).toBe(200);
-    expect(await shelved.json()).toEqual({ ok: true, pending: true });
+    const body = (await shelved.json()) as { ok: boolean; pending: boolean; next: string };
+    expect(body).toMatchObject({ ok: true, pending: true });
+    // The reply is what carries the learner's menu to the agent — Claude Code's
+    // own prompt cannot take a third option, so this is where it comes from.
+    expect(body.next).toContain('AskUserQuestion');
+    expect(body.next).toContain('Let me try');
 
     const parked = post('/hook', EDIT);
     await tick();
 
     const view = store.pending()[0];
     expect(view?.state).toBe('awaiting_decision');
-    expect(view?.lines[0]).toEqual({ n: 1, code: 'const a = 1', note: 'sets a to one' });
+    expect(view?.lines[0]).toEqual({ n: 1, code: 'const a = 1', note: 'sets a to one', required: true });
 
     await post('/decision', { ticket: view?.ticket, decision: 'allow' });
     expect((await decisionOf(await parked)).permissionDecision).toBe('allow');
@@ -108,13 +128,16 @@ describe('explaining before the change', () => {
     expect(second.permissionDecision).toBe('deny');
   });
 
-  it('falls back to a denial when the notes do not fit the change', async () => {
+  // A partial explanation still binds; the gap is shown, not punished.
+  it('binds even when the notes cover only part of the change', async () => {
     await post('/explain', { ...preExplanation, lines: [{ n: 1, note: 'sets a to one' }] });
 
-    const out = await decisionOf(await post('/hook', EDIT));
-    expect(out.permissionDecision).toBe('deny');
-    expect(out.permissionDecisionReason).toContain('did not match');
-    expect(out.permissionDecisionReason).toMatch(/t_[0-9a-f]+/);
+    const parked = post('/hook', EDIT);
+    await tick();
+    const view = store.pending()[0];
+    expect(view?.state).toBe('awaiting_decision');
+    await post('/decision', { ticket: view?.ticket, decision: 'allow' });
+    expect((await decisionOf(await parked)).permissionDecision).toBe('allow');
   });
 
   it('does not cross sessions', async () => {
@@ -151,17 +174,21 @@ describe('instructions', () => {
     const res = await app.request('/instructions', { headers: AUTH });
     const text = await res.text();
     expect(text).toContain('mcp__plugin_let-me-explain_lme__explain');
+    expect(text).toContain('mcp__plugin_let-me-explain_lme__let_me_try');
     expect(text).toContain('<let-me-explain>');
+    // The menu is the only way "let me try" is reachable, so the agent has to
+    // be told the tool that renders it.
+    expect(text).toContain('AskUserQuestion');
   });
 
   it('renders deterministically', () => {
-    const a = renderInstructions({ explainTool: 'x__explain' });
-    const b = renderInstructions({ explainTool: 'x__explain' });
+    const a = renderInstructions({ explainTool: 'x__explain', tryTool: 'x__let_me_try' });
+    const b = renderInstructions({ explainTool: 'x__explain', tryTool: 'x__let_me_try' });
     expect(a).toBe(b);
   });
 
   it('stays short enough to prepend to every session', () => {
-    const words = renderInstructions({ explainTool: 'x__explain' }).split(/\s+/).length;
+    const words = renderInstructions({ explainTool: 'x__explain', tryTool: 'x__let_me_try' }).split(/\s+/).length;
     expect(words).toBeLessThan(320);
   });
 });

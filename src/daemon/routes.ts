@@ -12,15 +12,17 @@ import {
 } from '../contracts/index.js';
 import { cleanAll, cleanSession, listTutorials } from '../core/cleanup.js';
 import type { Env } from '../core/paths.js';
-import { validateExplanation } from '../core/explanation.js';
-import { explainableLines } from '../core/lines.js';
+import { alignNotes, unexplained, validateExplanation } from '../core/explanation.js';
+import { explainableLines, requiredLineNumbers } from '../core/lines.js';
 import { TOOL_VERSION } from '../version.js';
 import type { Logger } from './log.js';
 import type { ModeStore } from './mode.js';
 import { renderInstructions } from './instructions.js';
 import {
   LEARNER_IS_TRYING,
+  chooseHowToProceed,
   explainMismatch,
+  learnerAlreadyWrote,
   explainRequest,
   explanationForPrompt,
   learnerFinished,
@@ -40,7 +42,25 @@ export interface DaemonDeps {
   token: string;
   decisionTimeoutMs?: number;
   tryWaitMs?: number;
+  /** Test seam: pretend a status bar has been polling since this timestamp. */
+  watcherSeenAt?: number;
 }
+
+// The VS Code status bar polls /active every 2s. Three missed polls means the
+// window is gone, reloading, or the extension was never installed.
+const WATCHER_TTL_MS = 6_000;
+
+// A poll only proves someone is *watching*; it does not prove they can show a
+// choice. The pre-buttons extension polled /active for tries alone, which was
+// enough to convince the daemon a decider existed and left a change held with
+// nothing on screen. So a decider now has to say so.
+const CLIENT_HEADER = 'x-let-me-explain-client';
+const BUTTONS_CLIENT = /\bbuttons\b/;
+
+const NO_WATCHER_HINT =
+  '(surface: window, but no VS Code buttons are listening — deciding here instead. ' +
+  'Update the let-me-explain extension and reload the VS Code window, ' +
+  'or run `let-me-explain surface prompt`.)';
 
 const allow = (): PreToolUseOutput => ({
   hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
@@ -67,6 +87,9 @@ const ask = (reason: string): PreToolUseOutput => ({
 export function createApp(deps: DaemonDeps): Hono {
   const { store, mode, log, toolNames, tries, env, token } = deps;
   const decisionTimeoutMs = deps.decisionTimeoutMs ?? LIMITS.decisionTimeoutMs;
+  // Last time anything polled /active. The VS Code extension polls every 2s, so
+  // a gap much larger than that means no buttons are on screen.
+  let watcherSeenAt = deps.watcherSeenAt ?? 0;
   const tryWaitMs = deps.tryWaitMs ?? LIMITS.tryHookWaitMs;
   const app = new Hono();
 
@@ -93,8 +116,9 @@ export function createApp(deps: DaemonDeps): Hono {
 
     // The learner is typing this one themselves. Park here rather than in the
     // MCP call: this hook's budget is minutes, an MCP request's is 60s.
-    const typing = tries.waitFor(event.sessionId, explainable.target, tryWaitMs);
-    if (typing) {
+    const parkIfTyping = async (): Promise<PreToolUseOutput | null> => {
+      const typing = tries.waitFor(event.sessionId, explainable.target, tryWaitMs);
+      if (!typing) return null;
       const outcome = await typing;
       await log.append({
         type: `try.${outcome.status}`,
@@ -103,13 +127,32 @@ export function createApp(deps: DaemonDeps): Hono {
       });
       // Never `allow` here: letting the tool run would overwrite what they
       // just wrote. Both branches deny.
-      return c.json(
-        deny(
-          outcome.status === 'done'
-            ? learnerFinished(explainable.target, outcome.yours, outcome.theirs)
-            : stillTyping(explainable.target),
-        ),
+      return deny(
+        outcome.status === 'done'
+          ? learnerFinished(explainable.target, outcome.yours, outcome.theirs)
+          : stillTyping(explainable.target),
       );
+    };
+
+    const alreadyTyping = await parkIfTyping();
+    if (alreadyTyping) return c.json(alreadyTyping);
+
+    // They already typed this one. Falling through would find the ticket still
+    // awaiting a decision and ask them to approve overwriting their own work.
+    if (
+      tries.alreadyWritten(
+        event.sessionId,
+        explainable.target,
+        explainable.lines.join('\n'),
+        LIMITS.ticketTtlMs,
+      )
+    ) {
+      await log.append({
+        type: 'try.already-written',
+        sessionId: event.sessionId,
+        target: explainable.target,
+      });
+      return c.json(deny(learnerAlreadyWrote(explainable.target)));
     }
 
     // Only *after* the try check: switching off stops future interception, it
@@ -162,12 +205,49 @@ export function createApp(deps: DaemonDeps): Hono {
       });
     }
 
+    // Coverage is no longer enforced, so it is measured instead: this is the
+    // only point where the notes and the real change are both in hand.
+    const gaps = unexplained(explainable, ticket.explanation?.lines ?? []);
+    await log.append({
+      type: 'explain.coverage',
+      sessionId: event.sessionId,
+      ticket: ticket.id,
+      target: explainable.target,
+      needed: requiredLineNumbers(explainable).length,
+      missing: gaps.length,
+    });
+
+    // The learner picked "let me try" from the menu, which happens *before* the
+    // agent makes its tool call — so there was no code for the tutorial yet.
+    // This is that code arriving, and the only point where both halves exist.
+    const intent = tries.takeArmed(event.sessionId, explainable.target, LIMITS.ticketTtlMs);
+    if (intent) {
+      const view = store.pending().find((p) => p.ticket === ticket.id);
+      if (view) {
+        await log.append({
+          type: 'try.begin',
+          sessionId: event.sessionId,
+          target: explainable.target,
+        });
+        // The hook's cwd is the real project directory; the MCP server could
+        // only guess at it.
+        await tries.begin(view, event.sessionId, event.cwd || intent.cwd, intent.sessionEnv);
+        const parked = await parkIfTyping();
+        if (parked) return c.json(parked);
+      }
+    }
+
     // The explanation exists; who shows it and collects the answer depends on
-    // the surface. `prompt` hands both jobs to Claude Code and returns now.
-    if (mode.surface(event.sessionId) === 'prompt') {
+    // the surface — but `window` only works if something is actually watching.
+    // Holding a tool call open with no VS Code extension polling and no one at
+    // a terminal is a silent hang with nothing on screen, so we detect the
+    // watcher rather than trusting the setting.
+    const surface = mode.surface(event.sessionId);
+    const unwatched = surface === 'window' && Date.now() - watcherSeenAt >= WATCHER_TTL_MS;
+    if (surface === 'prompt' || unwatched) {
       const view = store.pending().find((p) => p.ticket === ticket.id);
       await log.append({
-        type: 'decision.asked',
+        type: unwatched ? 'decision.unwatched' : 'decision.asked',
         sessionId: event.sessionId,
         ticket: ticket.id,
         toolName: event.toolName,
@@ -175,7 +255,11 @@ export function createApp(deps: DaemonDeps): Hono {
       // Deliberately not consumed: if the agent retries this same change the
       // ticket is still here, so it re-asks rather than demanding a fresh
       // explanation. It ages out with the normal TTL.
-      return c.json(ask(view ? explanationForPrompt(view) : 'Change explained by let-me-explain.'));
+      const explanation = view
+        ? explanationForPrompt(view)
+        : 'Change explained by let-me-explain.';
+      // Falling back silently would be as confusing as the hang it prevents.
+      return c.json(ask(unwatched ? `${explanation}\n${NO_WATCHER_HINT}` : explanation));
     }
 
     await log.append({
@@ -224,7 +308,11 @@ export function createApp(deps: DaemonDeps): Hono {
         target: target as string,
         lines: lines.length,
       });
-      return c.json({ ok: true, pending: true });
+      return c.json({
+        ok: true,
+        pending: true,
+        next: chooseHowToProceed(target as string, toolNames.letMeTry()),
+      });
     }
 
     const ticket = store.get(parsed.data.ticket);
@@ -252,7 +340,11 @@ export function createApp(deps: DaemonDeps): Hono {
       return c.json({ ok: false, error: valid.error }, 400);
     }
 
-    store.attachExplanation(ticket.id, { ...parsed.data, at: Date.now() });
+    store.attachExplanation(ticket.id, {
+      ...parsed.data,
+      lines: alignNotes(explainable, parsed.data.lines),
+      at: Date.now(),
+    });
     await log.append({
       type: 'explain.accepted',
       sessionId: ticket.sessionId,
@@ -273,7 +365,9 @@ export function createApp(deps: DaemonDeps): Hono {
   // Rendered here rather than in the hook because only the daemon knows the
   // name the harness actually gave our MCP tool.
   app.get('/instructions', (c) =>
-    c.text(renderInstructions({ explainTool: toolNames.explain() })),
+    c.text(
+      renderInstructions({ explainTool: toolNames.explain(), tryTool: toolNames.letMeTry() }),
+    ),
   );
 
   // How the outcome comes back when Claude Code owns the approval prompt.
@@ -305,10 +399,18 @@ export function createApp(deps: DaemonDeps): Hono {
 
     const view = store.viewFor(sessionId, target);
     if (!view) {
+      // Explained but not yet attempted — the normal path now that the learner
+      // chooses from a menu before the tool call. Remember the choice; the
+      // tutorial is written when the tool call brings the code.
+      if (store.hasPreExplanation(sessionId, target)) {
+        tries.arm(sessionId, target, cwd ?? '', sessionEnv);
+        await log.append({ type: 'try.armed', sessionId, target });
+        return c.json({ ok: true, status: 'armed' });
+      }
       return c.json(
         {
           ok: false,
-          error: `Nothing pending for "${target}". Propose the change first so it can be explained.`,
+          error: `Nothing pending for "${target}". Explain the change first, then call this.`,
         },
         404,
       );
@@ -339,7 +441,27 @@ export function createApp(deps: DaemonDeps): Hono {
 
   // Polled by the editor extension so it can show its "I'm done" button only
   // while the learner is actually typing something.
-  app.get('/active', (c) => c.json({ tries: tries.list() }));
+  // Both things a status bar can be waiting on: a change held for a decision,
+  // and a try the learner is part-way through. One poll covers both.
+  app.get('/active', (c) => {
+    // Polling is also how we know a status bar exists at all — see the hook,
+    // which will not hold a change open when nobody can answer. Older clients
+    // are still served; they just do not count.
+    if (BUTTONS_CLIENT.test(c.req.header(CLIENT_HEADER) ?? '')) watcherSeenAt = Date.now();
+    return c.json({
+      tries: tries.list(),
+      held: store
+        .pending()
+        .filter((p) => p.state === 'awaiting_decision' && store.isHeld(p.ticket))
+        .map((p) => ({
+          ticket: p.ticket,
+          sessionId: p.sessionId,
+          target: p.target,
+          why: p.why,
+          explanation: explanationForPrompt(p, 'buttons'),
+        })),
+    });
+  });
 
   app.get('/pending', (c) => c.json({ pending: store.pending() }));
 

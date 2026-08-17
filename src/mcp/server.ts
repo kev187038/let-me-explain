@@ -14,7 +14,8 @@ const DESCRIPTION = [
   'Explain a change to the learner watching this session.',
   'Call this BEFORE every Edit, Write, MultiEdit or Bash call, passing `target` (the file path, or "shell" for a command).',
   'If a tool call was already denied with a ticket id, pass that `ticket` instead and retry the call unchanged.',
-  `Give one note per non-blank line of the new content, numbered from 1, each under ${LIMITS.maxNoteWords} words.`,
+  `Give one note per changed line, in the order they appear, each under ${LIMITS.maxNoteWords} words. Unchanged context lines carried into an edit need no note.`,
+  `For a shell command you get ${LIMITS.maxShellNoteWords} words: name each flag and what it does.`,
   'Write for someone who knows basic programming but not this codebase: plain words, no jargon, no filler.',
 ].join(' ');
 
@@ -72,7 +73,7 @@ server.registerTool(
         body: JSON.stringify({ ticket, target, sessionId: SESSION_ID || undefined, lines, why }),
         signal: AbortSignal.timeout(10_000),
       });
-      const body = (await res.json()) as { ok?: boolean; error?: string };
+      const body = (await res.json()) as { ok?: boolean; error?: string; next?: string };
 
       // A rejection is returned as a tool error on purpose: the model reads it
       // and corrects itself, which is the whole self-repair loop.
@@ -83,13 +84,18 @@ server.registerTool(
         };
       }
 
+      // `next` carries the daemon's instruction to offer the learner a choice.
+      // It is written there rather than here because that is where every other
+      // agent-facing string lives, and where the real MCP tool name is known.
       return {
         content: [
           {
             type: 'text' as const,
-            text: ticket
-              ? 'Recorded. Now retry the tool call exactly as before; the learner decides from here.'
-              : 'Recorded. Go ahead with the tool call; it will pause while the learner reads.',
+            text:
+              body.next ??
+              (ticket
+                ? 'Recorded. Now retry the tool call exactly as before; the learner decides from here.'
+                : 'Recorded. Go ahead with the tool call; it will pause while the learner reads.'),
           },
         ],
       };
@@ -140,7 +146,7 @@ server.registerTool(
         }),
         signal: AbortSignal.timeout(15_000),
       });
-      const body = (await res.json()) as { ok?: boolean; error?: string };
+      const body = (await res.json()) as { ok?: boolean; error?: string; status?: string };
 
       if (!res.ok || !body.ok) {
         return {
@@ -149,11 +155,17 @@ server.registerTool(
         };
       }
 
+      // `armed` means the learner chose this from the menu before the tool call
+      // was ever made, so the daemon has the notes but not the code yet. Making
+      // the call is what opens the tutorial.
       return {
         content: [
           {
             type: 'text' as const,
-            text: `The tutorial and ${target} are open in the learner's editor. Now retry the original tool call — it will wait until they have finished and hand you what they wrote.`,
+            text:
+              body.status === 'armed'
+                ? `Noted — the learner is typing ${target} themselves. Make the original tool call now: it opens the tutorial, waits while they type, and returns what they wrote. Never write the file for them.`
+                : `The tutorial and ${target} are open in the learner's editor. Now make the original tool call — it will wait until they have finished and hand you what they wrote.`,
           },
         ],
       };

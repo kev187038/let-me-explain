@@ -97,6 +97,10 @@ The strings sent back to the agent.
 thing steering the model back into the loop, and wording changes here change behaviour. They
 deserve to be found, diffed and iterated on without hunting through route handlers.
 
+`chooseHowToProceed` is the one that produces the learner's menu. It belongs here rather than in
+the MCP server for the same reason as the rest — and because the real, *learned* MCP tool name is
+available on this side, so the text can name the tool the agent should actually call.
+
 ### `src/daemon/instructions.ts`
 Renders the text injected into every session.
 
@@ -288,7 +292,8 @@ discipline.
 ## The editor extension
 
 ### `vscode-extension/src/daemon.ts`
-Everything the button *does*: find the daemon, poll `/active`, POST `/done`.
+Everything the buttons *do*: find the daemon, poll `/active`, POST `/decision` for **✓ Allow** and
+**✎ Let me try**, POST `/done` for **✓ I'm done**.
 
 **Why it is split out of `extension.ts`:** with the logic inside `activate()` nothing could reach
 it, so the button was untestable. With no `vscode` import, the end-to-end test presses the button
@@ -298,8 +303,13 @@ by running its real code rather than a copy — which is how the target-identity
 command is registered. That needs `@vscode/test-electron`, a ~200 MB download and a display.
 
 ### `vscode-extension/src/extension.ts`
-The VS Code wiring: a status-bar button that appears while a try is waiting, and the command it
-runs. All daemon traffic lives in `daemon.ts`.
+The VS Code wiring: three status-bar items and their commands — **✓ Allow** and **✎ Let me try**
+while a change is held, **✓ I'm done** while a try is in flight. All daemon traffic lives in
+`daemon.ts`.
+
+**Why the explanation is in the tooltip:** the status bar has room for a verb and a filename.
+Hovering is where reading happens, so the rendered line-by-line explanation rides along in
+`/active` and goes straight into a `MarkdownString` — no second request when you hover.
 
 **Why it exists at all:** VS Code's built-in markdown preview draws task-list checkboxes but does
 not make them clickable, and the preview is owned by VS Code — no plugin can change it. A real

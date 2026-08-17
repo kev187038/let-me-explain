@@ -93,7 +93,12 @@ beforeAll(async () => {
   daemon = spawn('npx', ['tsx', daemonEntry], { env: childEnv(), stdio: 'ignore' });
   for (let i = 0; i < 100; i++) {
     await sleep(100);
-    if (await readDaemonAddress(env)) return;
+    if (await readDaemonAddress(env)) {
+      // The default surface holds the hook open until a human decides. These
+      // tests are about the CLI, so they use the surface that answers at once.
+      await api('/surface', { method: 'POST', body: JSON.stringify({ surface: 'prompt' }) });
+      return;
+    }
   }
   throw new Error('daemon did not start');
 }, 40_000);

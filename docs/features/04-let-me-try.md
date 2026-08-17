@@ -23,10 +23,44 @@ on your own. That satisfies the sentence in the README and teaches nothing. What
 recreate is following a good video: the instructor shows the code and explains it, **and you type
 it**, with the explanation still on screen.
 
+## How to reach it
+
+**A menu, right after the explanation.** Claude Code's permission prompt has three fixed entries —
+yes, yes-and-don't-ask, no — and a plugin cannot add a fourth; that is settled, not a gap waiting
+to be filled (see [decisions.md](../decisions.md)). But `AskUserQuestion` is a built-in Claude Code
+tool that renders a genuine multiple-choice list, and the agent can call it. The `explain` tool's
+reply asks it to:
+
+```
+  How do you want to handle src/auth.ts?
+  ❯ 1. Yes, go ahead
+    2. Let me try — I'll type it myself
+    3. Explain more first
+```
+
+The wording lives in `chooseHowToProceed` in `src/daemon/prompts.ts`, beside every other
+agent-facing string, and reaches the agent as the `next` field of `POST /explain`. It is *not* in
+the session-start instructions: just-in-time context lands adjacent to the action and costs nothing
+in a session where no edit happens.
+
+**Nothing reports the answer back to us, on purpose.** A tool that recorded "the learner said yes"
+would let the hook allow silently and save a keypress — and would also let a model that never
+showed the menu approve its own change. The menu is additive: skip it and you get the ordinary
+prompt, where *"No, and tell Claude what to do differently"* plus **"let me try"** still works.
+
+**On `surface: window`** the VS Code status bar carries the same choice as buttons — **✓ Allow**
+and **✎ Let me try** — with the explanation in the tooltip. From a terminal that is
+`let-me-explain pending`, then `allow` or `try`.
+
 ## How it works
 
-1. The agent proposes a change; the explanation appears in the approval prompt.
-2. You reject it and say you will write it yourself.
+1. The agent explains the change; the explanation appears inline under `prompt`, or in the
+   button's tooltip under `window`.
+2. You pick **Let me try** from the menu (or the status-bar button, or reject and say so).
+   Choosing from the menu happens *before* the agent has made its tool call, so the daemon has
+   your notes but not yet the code. It remembers the choice and writes the tutorial the instant
+   the tool call brings the code — see `status: "armed"` in
+   [reference/protocol.md](../reference/protocol.md).
 3. The agent calls `let_me_try({ target })` — the injected instructions tell it to. It opens the
    tutorial and your file and **returns immediately**.
 4. The agent retries the original tool call. The hook sees a try in flight and **parks**.
@@ -34,6 +68,13 @@ it**, with the explanation still on screen.
 6. You say when you are done — see below.
 7. The hook denies the retry and hands the agent **what you wrote** next to **what it intended**,
    and the instructions tell it to compare briefly and kindly rather than rewrite your file.
+8. The tutorial stays, with a **Handed back ✓** footer. It used to be deleted the instant you
+   ticked the box, which pulled the document out from under you while it was open in your editor
+   — and took the explanation with it exactly when you were reading the feedback. It ages out
+   with the rest, or goes on `let-me-explain clean`.
+9. The same tool call is refused from then on. The ticket used to outlive the try, so the agent's
+   next identical call asked you to approve overwriting the file you had just typed. A *different*
+   change to the same file is unaffected — the match is on content, not filename.
 
 Nothing new is generated for the tutorial. Under `surface: prompt` the ticket is deliberately kept
 after the prompt is shown, so the daemon still holds the code (from `toolInput`) and the notes

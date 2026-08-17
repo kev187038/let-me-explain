@@ -89,4 +89,21 @@ describe('summarise', () => {
     expect(s.mismatched).toBe(1);
     expect(s.rejected).toBe(0);
   });
+
+  // Coverage is reported rather than enforced, so the number has to be real.
+  it('reports the share of changed lines that arrived explained', () => {
+    const s = summarise(
+      parseLogLines(
+        [
+          line({ type: 'explain.coverage', ticket: 't1', needed: 4, missing: 1 }),
+          line({ type: 'explain.coverage', ticket: 't2', needed: 6, missing: 0 }),
+        ].join('\n'),
+      ),
+    );
+    expect(s.coverage).toBeCloseTo(9 / 10);
+  });
+
+  it('has no coverage to report before anything is explained', () => {
+    expect(summarise(parseLogLines(line({ type: 'ticket.minted' }))).coverage).toBeNull();
+  });
 });

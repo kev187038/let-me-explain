@@ -58,6 +58,8 @@ beforeEach(async () => {
   env = { home, xdgStateHome: join(home, 'state') };
   store = createTicketStore();
   mode = await createModeStore(fsIo, modePath(env));
+  // This file exercises the prompt surface specifically.
+  await mode.setSurface('prompt');
   app = createApp({
     store,
     tries: createTryStore(env, fsIo, () => {}),
@@ -76,6 +78,8 @@ afterEach(async () => {
 });
 
 describe('mode file compatibility', () => {
+  // The terminal menu makes let-me-try reachable here, so `window` is no
+  // longer the only surface where it is a real choice.
   it('defaults to the prompt surface', () => {
     expect(parseModeFile(null).global).toEqual(DEFAULTS);
     expect(DEFAULTS.surface).toBe('prompt');
@@ -162,6 +166,7 @@ describe('explanationForPrompt', () => {
       n: i + 1,
       code: `line ${i + 1}`,
       note: `note ${i + 1}`,
+      required: true,
     })),
   });
 
@@ -183,10 +188,55 @@ describe('explanationForPrompt', () => {
     expect(text).toContain('15 more line(s)');
   });
 
-  it('skips lines that were never explained', () => {
+  // Refusing the change was worse than showing it with a hole in it: the
+  // learner never saw the edit at all, and the agent burned a round trip.
+  it('shows a line with no note as a gap rather than dropping it', () => {
     const v = view(2);
     delete (v.lines[1] as { note?: string }).note;
-    expect(explanationForPrompt(v)).not.toContain('note 2');
+    const text = explanationForPrompt(v);
+    expect(text).not.toContain('note 2');
+    expect(text).toContain('— not explained —');
+  });
+
+  // Context carried into an Edit was never asked for, so calling it a gap
+  // blames the agent for something it was right to skip.
+  it('leaves a line that never needed a note out of the listing', () => {
+    const v = view(2);
+    delete (v.lines[1] as { note?: string }).note;
+    delete (v.lines[1] as { required?: boolean }).required;
+    const text = explanationForPrompt(v);
+    expect(text).not.toContain('— not explained —');
+    expect(text).toContain('note 1');
+  });
+
+  it('names the buttons instead of the prompt when it is a tooltip', () => {
+    expect(explanationForPrompt(view(1), 'buttons')).toContain('✎ Let me try');
+    expect(explanationForPrompt(view(1), 'buttons')).not.toContain('reject with');
+  });
+});
+
+describe('what the buttons can act on', () => {
+  it('offers nothing while Claude Code owns the decision', async () => {
+    await post('/explain', {
+      sessionId: SESSION,
+      target: 'src/a.ts',
+      lines: [{ n: 1, note: 'sets a' }],
+      why: 'because',
+    });
+    await post('/hook', {
+      sessionId: SESSION,
+      cwd: '/repo',
+      toolName: 'Write',
+      toolInput: { file_path: 'src/a.ts', content: 'const a = 1' },
+    });
+
+    // The ticket is deliberately left in `awaiting_decision` so a retry re-asks
+    // — but nobody is parked on it, so clicking Allow would answer a question
+    // that was never put to us.
+    expect(store.pending().some((p) => p.state === 'awaiting_decision')).toBe(true);
+    const res = await app.request('/active', { headers: AUTH });
+    const body = (await res.json()) as { held: unknown[] };
+    expect(body.held).toEqual([]);
   });
 });
 

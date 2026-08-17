@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { type FSWatcher, watch } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { accessSync, constants } from 'node:fs';
 import type { PendingView } from '../contracts/index.js';
@@ -67,7 +67,27 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
   }
 
   const attempts = new Map<string, Attempt>();
+  // Tries chosen before the agent made its tool call, so there was no code to
+  // put in the tutorial yet. Held here until the hook arrives carrying it.
+  const armed = new Map<string, { at: number; cwd: string; sessionEnv: SessionEnv }>();
+  // Tries the learner has finished. Kept so a repeat of the same tool call is
+  // refused outright instead of asking them to approve overwriting their work.
+  const finished = new Map<string, { at: number; theirs: string }>();
   const key = (sessionId: string, target: string) => `${sessionId}:${target}`;
+
+  // Rewrites the tutorial in place so an open editor buffer updates rather
+  // than vanishing. Best-effort: losing the banner must not fail the handoff.
+  async function markFinished(tutorial: string): Promise<void> {
+    try {
+      const text = await readFile(tutorial, 'utf8');
+      await io.writeFileAtomic(
+        tutorial,
+        `${text.trimEnd()}\n\n---\n\n## Handed back ✓\n\nClaude has your version and is comparing it with what it would have written.\nThis file is yours to keep — \`let-me-explain clean\` removes it when you are done.\n`,
+      );
+    } catch {
+      // The tutorial may already be gone; nothing here is worth failing for.
+    }
+  }
 
   async function settle(id: string, status: TryOutcome['status']): Promise<void> {
     const attempt = attempts.get(id);
@@ -92,8 +112,12 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
 
     if (status === 'done') {
       attempts.delete(id);
-      // The tutorial has served its purpose the moment the try ends.
-      await rm(attempt.tutorial, { force: true }).catch(() => {});
+      finished.set(id, { at: Date.now(), theirs: attempt.theirs });
+      // The tutorial is kept, not deleted. Removing it pulled the document out
+      // from under the learner while it was still open in their editor, taking
+      // the explanation with it exactly when they were reading the feedback.
+      // It ages out with the rest, or goes on `let-me-explain clean`.
+      await markFinished(attempt.tutorial);
     }
   }
 
@@ -120,6 +144,46 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
 
     inFlight(sessionId: string, target: string): boolean {
       return attempts.has(key(sessionId, target));
+    },
+
+    /**
+     * True when the learner has already typed this exact change themselves.
+     *
+     * Without it the agent's next identical tool call finds a ticket still
+     * sitting in `awaiting_decision` and the learner is asked to approve
+     * overwriting the file they just wrote. Matching on the *content* rather
+     * than the file keeps a genuinely different later edit unaffected.
+     */
+    alreadyWritten(sessionId: string, target: string, code: string, ttlMs: number): boolean {
+      const done = finished.get(key(sessionId, target));
+      if (!done) return false;
+      if (Date.now() - done.at > ttlMs) {
+        finished.delete(key(sessionId, target));
+        return false;
+      }
+      return done.theirs.trim() === code.trim();
+    },
+
+    // The learner said "let me try" from the menu, before the tool call.
+    arm(sessionId: string, target: string, cwd: string, sessionEnv: SessionEnv): void {
+      armed.set(key(sessionId, target), { at: Date.now(), cwd, sessionEnv });
+    },
+
+    /** The armed intent, if one is still fresh. Reading it clears it. */
+    takeArmed(
+      sessionId: string,
+      target: string,
+      ttlMs: number,
+    ): { cwd: string; sessionEnv: SessionEnv } | null {
+      const id = key(sessionId, target);
+      const intent = armed.get(id);
+      if (!intent) return null;
+      armed.delete(id);
+      // An intent the agent never followed up on must not ambush a later,
+      // unrelated change to the same file.
+      return Date.now() - intent.at > ttlMs
+        ? null
+        : { cwd: intent.cwd, sessionEnv: intent.sessionEnv };
     },
 
     async begin(
@@ -222,6 +286,8 @@ export function createTryStore(env: Env, io: FsIo, launch: Launcher = spawnLaunc
     },
 
     close(): void {
+      armed.clear();
+      finished.clear();
       for (const attempt of attempts.values()) {
         if (attempt.quiet) clearTimeout(attempt.quiet);
         if (attempt.deadline) clearTimeout(attempt.deadline);

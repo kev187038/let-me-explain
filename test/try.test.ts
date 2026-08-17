@@ -14,6 +14,16 @@ import { createToolNames } from '../src/daemon/tool-name.js';
 import { createTryStore, type TryStore } from '../src/daemon/try.js';
 import { fsIo } from '../src/io/fs-io.js';
 
+// The default surface is now `window`, where /hook blocks until a human
+// decides. These suites are about what happens around that decision, so they
+// pin the prompt surface, where the hook answers straight away.
+async function promptMode(e: Env) {
+  const store = await createModeStore(fsIo, modePath(e));
+  await store.setSurface('prompt');
+  return store;
+}
+
+
 const TOKEN = 'test-token';
 const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 const SESSION = 's1';
@@ -58,7 +68,7 @@ beforeEach(async () => {
     store,
     tries,
     env,
-    mode: await createModeStore(fsIo, modePath(env)),
+    mode: await promptMode(env),
     log: createLogger(fsIo, env),
     toolNames: createToolNames(),
     token: TOKEN,
@@ -91,7 +101,68 @@ describe('let-me-try', () => {
   it('refuses when nothing is pending for that file', async () => {
     const res = await post('/try', { sessionId: SESSION, target: 'src/nope.ts' });
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { error: string }).error).toContain('Propose the change first');
+    expect(((await res.json()) as { error: string }).error).toContain('Explain the change first');
+  });
+
+  // The flow the menu created, and the one that broke in real use: the learner
+  // picks "let me try" straight after the explanation, before the agent has
+  // made its tool call at all. There is no ticket then, and no code — the
+  // tutorial cannot be written until the tool call carries it.
+  describe('chosen from the menu, before the tool call', () => {
+    const explain = (target: string) =>
+      post('/explain', {
+        sessionId: SESSION,
+        target,
+        lines: [
+          { n: 1, note: 'names the greeting' },
+          { n: 2, note: 'hands it back' },
+        ],
+        why: 'greeting broke on blank names',
+      });
+
+    it('accepts the choice and waits for the code', async () => {
+      await explain('src/greet.js');
+
+      const res = await post('/try', { sessionId: SESSION, target: 'src/greet.js', cwd: repo });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { status: string }).status).toBe('armed');
+      // Nothing to open yet — the daemon has the notes but not the code.
+      expect(launched).toHaveLength(0);
+    });
+
+    it('opens the tutorial and parks as soon as the tool call brings the code', async () => {
+      await explain('src/greet.js');
+      await post('/try', { sessionId: SESSION, target: 'src/greet.js', cwd: repo });
+
+      const parked = retry('src/greet.js', 'const hi = "hello"\nreturn hi');
+      await new Promise((r) => setTimeout(r, 60));
+
+      const tutorial = await readFile(tutorialPath(env, SESSION, 'src/greet.js'), 'utf8');
+      expect(tutorial).toContain('const hi = "hello"');
+      expect(tutorial).toContain('└ names the greeting');
+      expect(launched).toHaveLength(1);
+
+      // The learner types their own version and says they are done.
+      await writeFile(join(repo, 'src/greet.js'), 'const hi = "hi there"\nreturn hi\n');
+      expect((await tries.finish(SESSION, 'src/greet.js')).ok).toBe(true);
+
+      const out = await reasonOf(await parked);
+      expect(out.permissionDecision).toBe('deny');
+      expect(out.permissionDecisionReason).toContain('hi there');
+    });
+
+    it('does not ambush a later change once the intent has gone stale', async () => {
+      await explain('src/greet.js');
+      await post('/try', { sessionId: SESSION, target: 'src/greet.js', cwd: repo });
+      // Consumed by the first tool call; a second must not re-open a tutorial.
+      await retry('src/greet.js', 'const a = 1');
+      await tries.finish(SESSION, 'src/greet.js');
+      launched.length = 0;
+
+      await explain('src/greet.js');
+      await retry('src/greet.js', 'const b = 2');
+      expect(launched).toHaveLength(0);
+    });
   });
 
   it('opens the tutorial and the file, and returns at once', async () => {
@@ -146,7 +217,10 @@ describe('let-me-try', () => {
     expect(out.permissionDecisionReason).toContain('still typing');
   });
 
-  it('deletes the tutorial once the try is finished', async () => {
+  // Deleting it used to pull the document out from under the learner while it
+  // was still open in their editor, taking the explanation with it exactly when
+  // they were reading Claude's feedback on their code.
+  it('keeps the tutorial after the try, and marks it handed back', async () => {
     await pendingChange('src/a.ts', 'const a = 1', ['sets a']);
     await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
     expect(await listTutorials(env)).toHaveLength(1);
@@ -155,7 +229,42 @@ describe('let-me-try', () => {
     await tick(30);
     await post('/done', { sessionId: SESSION });
     await parked;
-    expect(await listTutorials(env)).toHaveLength(0);
+
+    const [tutorial] = await listTutorials(env);
+    expect(tutorial).toBeTruthy();
+    const text = await readFile(tutorial as string, 'utf8');
+    expect(text).toContain('Handed back');
+    // The explanation the learner was reading survives.
+    expect(text).toContain('└ sets a');
+  });
+
+  // The bug: the ticket outlived the try, so the agent's next identical call
+  // asked the learner to approve overwriting the file they had just typed.
+  it('refuses the same change again once the learner has written it', async () => {
+    await pendingChange('src/a.ts', 'const a = 1', ['sets a']);
+    await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    const parked = retry('src/a.ts', 'const a = 1');
+    await tick(30);
+    await writeFile(join(repo, 'src/a.ts'), 'const a = 1 // mine\n');
+    await post('/done', { sessionId: SESSION });
+    await parked;
+
+    const again = await reasonOf(await retry('src/a.ts', 'const a = 1'));
+    expect(again.permissionDecision).toBe('deny');
+    expect(again.permissionDecisionReason).toContain('already typed');
+  });
+
+  it('still gates a genuinely different change to the same file', async () => {
+    await pendingChange('src/a.ts', 'const a = 1', ['sets a']);
+    await post('/try', { sessionId: SESSION, target: 'src/a.ts', cwd: repo });
+    const parked = retry('src/a.ts', 'const a = 1');
+    await tick(30);
+    await post('/done', { sessionId: SESSION });
+    await parked;
+
+    // Different content, so the learner has not already written this one.
+    const next = await reasonOf(await retry('src/a.ts', 'const b = 2'));
+    expect(next.permissionDecisionReason).not.toContain('already typed');
   });
 
   it('does not open a second editor when the agent calls try twice', async () => {
@@ -242,7 +351,7 @@ describe('let-me-try', () => {
   // resolves the ticket. /try used to look tickets up via pending(), which
   // filters resolved ones out — so let-me-try 404'd on that surface entirely.
   it('opens after a `try` decision on the window surface', async () => {
-    const mode = await createModeStore(fsIo, modePath(env));
+    const mode = await promptMode(env);
     await mode.setSurface('window');
     const windowApp = createApp({
       store,
@@ -296,7 +405,7 @@ describe('let-me-try', () => {
       store: shortLived,
       tries: tryStore,
       env,
-      mode: await createModeStore(fsIo, modePath(env)),
+      mode: await promptMode(env),
       log: createLogger(fsIo, env),
       toolNames: createToolNames(),
       token: TOKEN,
